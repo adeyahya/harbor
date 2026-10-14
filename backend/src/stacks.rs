@@ -53,6 +53,16 @@ pub struct Stack {
     pub last_commit: String,
     pub last_commit_message: String,
     pub last_seen_commit: String,
+    pub pinned: bool,
+    pub group_id: Option<i64>,
+    /// Git account for the repository; None picks the one for its host.
+    pub git_account_id: Option<i64>,
+}
+
+impl Stack {
+    async fn token(&self, db: &sqlx::SqlitePool) -> String {
+        crate::accounts::resolve_token(db, &self.git_url, self.git_account_id, &self.git_token).await
+    }
 }
 
 fn is_set<S: Serializer>(value: &str, s: S) -> Result<S::Ok, S::Error> {
@@ -97,6 +107,8 @@ pub struct StackInput {
     pub compose_path: String,
     #[serde(default)]
     pub auto_deploy: bool,
+    #[serde(default)]
+    pub git_account_id: Option<i64>,
 }
 
 fn default_source() -> String {
@@ -204,7 +216,7 @@ async fn detail(State(state): State<AppState>, Path(name): Path<String>) -> AppR
 }
 
 /// Normalizes and validates input, resolving a blank branch to the default.
-async fn prepare(input: &mut StackInput, stored_token: &str) -> AppResult<()> {
+async fn prepare(state: &AppState, input: &mut StackInput, stored_token: &str) -> AppResult<()> {
     input.project_dir = input.project_dir.trim().to_string();
     if !input.project_dir.is_empty() && !FsPath::new(&input.project_dir).is_absolute() {
         return Err(AppError::bad_request("project directory must be an absolute path"));
@@ -216,8 +228,9 @@ async fn prepare(input: &mut StackInput, stored_token: &str) -> AppResult<()> {
             if input.git_url.is_empty() || input.git_url.starts_with('-') {
                 return Err(AppError::bad_request("repository URL is required"));
             }
-            let token = input.git_token.as_deref().unwrap_or(stored_token);
-            input.git_branch = git::resolve_branch(&input.git_url, &input.git_branch, token)
+            let fallback = input.git_token.as_deref().unwrap_or(stored_token);
+            let token = crate::accounts::resolve_token(&state.db, &input.git_url, input.git_account_id, fallback).await;
+            input.git_branch = git::resolve_branch(&input.git_url, &input.git_branch, &token)
                 .await
                 .map_err(AppError::bad_request)?;
             if input.git_branch.starts_with('-') || input.git_branch.contains(char::is_whitespace) {
@@ -234,12 +247,12 @@ async fn prepare(input: &mut StackInput, stored_token: &str) -> AppResult<()> {
 pub async fn insert(state: &AppState, mut input: StackInput) -> AppResult<Stack> {
     let name = input.name.clone().unwrap_or_default();
     validate_name(&name)?;
-    prepare(&mut input, "").await?;
+    prepare(state, &mut input, "").await?;
     let ts = now();
     Ok(sqlx::query_as::<_, Stack>(
         "INSERT INTO stacks (name, compose, env, created_at, updated_at, project_dir, source, git_url, git_branch,
-           git_token, compose_path, auto_deploy, webhook_secret)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+           git_token, compose_path, auto_deploy, webhook_secret, git_account_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .bind(&name)
     .bind(&input.compose)
@@ -254,6 +267,7 @@ pub async fn insert(state: &AppState, mut input: StackInput) -> AppResult<Stack>
     .bind(&input.compose_path)
     .bind(input.auto_deploy)
     .bind(hex::encode(rand::random::<[u8; 20]>()))
+    .bind(input.git_account_id)
     .fetch_one(&state.db)
     .await?)
 }
@@ -268,10 +282,10 @@ async fn update(
     Json(mut input): Json<StackInput>,
 ) -> AppResult<Json<Stack>> {
     let existing = fetch(&state, &name).await?;
-    prepare(&mut input, &existing.git_token).await?;
+    prepare(&state, &mut input, &existing.git_token).await?;
     let stack = sqlx::query_as::<_, Stack>(
         "UPDATE stacks SET compose = ?, env = ?, updated_at = ?, project_dir = ?, source = ?, git_url = ?, git_branch = ?,
-           git_token = COALESCE(?, git_token), compose_path = ?, auto_deploy = ?
+           git_token = COALESCE(?, git_token), compose_path = ?, auto_deploy = ?, git_account_id = ?
          WHERE id = ? RETURNING *",
     )
     .bind(&input.compose)
@@ -284,6 +298,7 @@ async fn update(
     .bind(input.git_token.as_deref().map(str::trim))
     .bind(&input.compose_path)
     .bind(input.auto_deploy)
+    .bind(input.git_account_id)
     .bind(existing.id)
     .fetch_one(&state.db)
     .await?;
@@ -409,7 +424,8 @@ const UP: &[&str] = &["up", "-d", "--remove-orphans"];
 async fn deploy(state: &AppState, log: &UpdateLog, layout: &Layout, stack: &Stack) -> anyhow::Result<()> {
     let mut commit = String::new();
     if stack.source == "git" {
-        let c = git::sync_checkout(log, &layout.checkout, &stack.git_url, &stack.git_branch, &stack.git_token).await?;
+        let token = stack.token(&state.db).await;
+        let c = git::sync_checkout(log, &layout.checkout, &stack.git_url, &stack.git_branch, &token).await?;
         log.line(format!("checked out {} \"{}\"", c.short(), c.message)).await;
         log.set_detail(&format!("{} {}", c.short(), c.message)).await;
         sqlx::query("UPDATE stacks SET last_seen_commit = ? WHERE id = ?")
@@ -483,7 +499,8 @@ async fn roll_back(state: &AppState, log: &UpdateLog, layout: &Layout, stack: &S
         // Restore the commit; `last_seen_commit` stays so the poller doesn't
         // immediately redeploy the newer head.
         log.line(format!("checking out {} from deploy #{}", &snapshot.commit[..7.min(snapshot.commit.len())], target.id)).await;
-        let c = git::fetch_and_reset(log, &layout.checkout, &stack.git_url, &snapshot.commit, &stack.git_token).await?;
+        let token = stack.token(&state.db).await;
+        let c = git::fetch_and_reset(log, &layout.checkout, &stack.git_url, &snapshot.commit, &token).await?;
         log.set_detail(&format!("↩ {} {}", c.short(), c.message)).await;
         sqlx::query_as::<_, Stack>(
             "UPDATE stacks SET env = ?, last_commit = ?, last_commit_message = ?, updated_at = ? WHERE id = ? RETURNING *",
@@ -611,7 +628,7 @@ async fn poll_one(state: &AppState, stack: Stack) -> anyhow::Result<()> {
     }
     let head = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        git::remote_head(&stack.git_url, &stack.git_branch, &stack.git_token),
+        git::remote_head(&stack.git_url, &stack.git_branch, &stack.token(&state.db).await),
     )
     .await
     .map_err(|_| anyhow::anyhow!("timed out checking {}", stack.name))??;

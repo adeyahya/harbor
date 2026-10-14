@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Boxes, HardDrive, Network as NetworkIcon, Search, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
+import { Outlet, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { api, type ImageSummary, type Network, type Volume } from '@/api'
 import { Confirm } from '@/components/app/confirm'
@@ -30,9 +31,12 @@ function ResourcePage<T>(props: {
   removable?: (item: T) => boolean
   search: (item: T) => string
   columns: Column<T>[]
+  /** Opens a detail panel (rendered through the route's Outlet). */
+  linkOf?: (item: T) => string
   empty: string
 }) {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const run = useRunAction()
   const { data, isLoading, error } = useQuery({ queryKey: [props.queryKey], queryFn: () => api.get<T[]>(props.path), refetchInterval: 10000 })
   const remove = useMutation({
@@ -82,13 +86,18 @@ function ResourcePage<T>(props: {
             </TableHeader>
             <TableBody>
               {items.map((item) => (
-                <TableRow key={props.idOf(item)}>
+                <TableRow
+                  key={props.idOf(item)}
+                  className={props.linkOf ? 'cursor-pointer' : undefined}
+                  onClick={props.linkOf ? () => navigate(props.linkOf!(item)) : undefined}
+                >
                   {props.columns.map((c, i) => (
                     <TableCell key={c.head} className={i === 0 ? `pl-4 ${c.className ?? ''}` : c.className}>
                       {c.cell(item)}
                     </TableCell>
                   ))}
-                  <TableCell className="pr-3 text-right">
+                  {/* Dialogs portal out but their events still bubble here; keep them off the row. */}
+                  <TableCell className="pr-3 text-right" onClick={(e) => e.stopPropagation()}>
                     {(props.removable?.(item) ?? true) && (
                       <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => setPending(item)} aria-label="Remove">
                         <Trash2 />
@@ -103,6 +112,7 @@ function ResourcePage<T>(props: {
           <EmptyState icon={props.icon} title={data?.length ? 'No matches' : props.empty} />
         )}
       </Surface>
+      <Outlet />
       <Confirm
         open={pending !== null}
         onOpenChange={(o) => !o && setPending(null)}
@@ -153,12 +163,13 @@ export function VolumesPage() {
     <ResourcePage<Volume>
       title="Volumes"
       icon={<HardDrive />}
-      description={(items) => `${items.length} volumes`}
+      description={(items) => `${items.length} volumes · click one to browse its files`}
       queryKey="volumes"
       path="/docker/volumes"
       prune={{ kind: 'volumes', title: 'Prune unused volumes?', description: 'Every volume not attached to a container is deleted along with its data.' }}
       idOf={(v) => v.Name}
       labelOf={(v) => v.Name}
+      linkOf={(v) => `/volumes/${encodeURIComponent(v.Name)}`}
       search={(v) => v.Name}
       empty="No volumes"
       columns={[

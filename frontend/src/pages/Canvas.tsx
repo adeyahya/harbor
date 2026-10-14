@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, Box, Cpu, GitBranch, HardDrive, Layers, MemoryStick, PackageOpen, Plus } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { ArrowRight, Box, Cpu, FolderPlus, GitBranch, HardDrive, Layers, MemoryStick, PackageOpen, Pin, Plus } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
 import { Link, Outlet, useLocation } from 'react-router'
 import { api, repoLabel, type ContainerSummary, type DeploymentListItem, type Port, type StackListItem, type SystemOverview } from '@/api'
+import { GroupNameDialog, GroupSection, Section, ServiceCard, useCanvasActions, useCanvasGroups, type CanvasItem } from '@/components/app/canvas'
 import { useCreate } from '@/components/app/CreateDialog'
 import { GithubIcon } from '@/components/app/GithubIcon'
 import { ErrorAlert, Loading } from '@/components/app/page'
-import { Status, StatusDot } from '@/components/app/status'
+import { StatusDot } from '@/components/app/status'
 import { Button } from '@/components/ui/button'
 import { bytes, containerName, percent } from '@/lib/format'
 import { importableCount, useImportCandidates } from '@/pages/Import'
@@ -73,28 +74,6 @@ function PortLinks({ ports }: { ports: number[] }) {
   )
 }
 
-function ServiceCard({ to, icon, name, selected, children, status }: { to: string; icon: ReactNode; name: string; selected: boolean; children?: ReactNode; status: string }) {
-  return (
-    <Link
-      to={to}
-      data-service-card
-      className={cn(
-        'group flex w-full min-w-0 flex-col rounded-2xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-lg hover:shadow-black/20 sm:w-72',
-        selected && 'border-brand/70 ring-3 ring-brand/20',
-      )}
-    >
-      <div className="flex items-center gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted/60 text-brand">{icon}</div>
-        <div className="min-w-0 flex-1 truncate font-semibold">{name}</div>
-      </div>
-      <div className="mt-3 min-h-10 space-y-2 text-sm">{children}</div>
-      <div className="mt-4 flex items-center border-t pt-3">
-        <Status status={status} />
-      </div>
-    </Link>
-  )
-}
-
 function EmptyCanvas() {
   const create = useCreate()
   return (
@@ -137,6 +116,96 @@ export function CanvasPage() {
     if (p) byProject.set(p, [...(byProject.get(p) ?? []), c])
   }
   const byId = new Map((containers.data ?? []).map((c) => [c.Id, c]))
+  const groups = useCanvasGroups()
+  const { createGroup } = useCanvasActions()
+  const [newGroup, setNewGroup] = useState(false)
+
+  // One list of canvas items, each with the card content it renders.
+  const items: (CanvasItem & { body: ReactNode; icon: ReactNode })[] = [
+    ...(stacks.data ?? []).map((s) => {
+      const services = byProject.get(s.name) ?? []
+      return {
+        kind: 'stack' as const,
+        name: s.name,
+        status: s.status,
+        pinned: s.pinned,
+        groupId: s.group_id,
+        to: `/stacks/${s.name}`,
+        icon: s.source === 'git' ? <GithubIcon className="size-4.5" /> : <Layers className="size-4.5" />,
+        body: (
+          <>
+            {s.source === 'git' && (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="truncate font-medium text-foreground/90">{repoLabel(s.git_url)}</span>
+                <GitBranch className="size-3 shrink-0" />
+                <span className="truncate font-mono">{s.git_branch}</span>
+                {s.last_commit && <span className="shrink-0 font-mono text-brand">{s.last_commit.slice(0, 7)}</span>}
+              </div>
+            )}
+            {services.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {services.map((c) => (
+                  <span key={c.Id} className="inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-1.5 py-0.5 text-xs">
+                    <StatusDot status={c.State} className="size-1.5" />
+                    {c.Labels['com.docker.compose.service'] ?? containerName(c.Names)}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">Compose stack · not running</p>
+            )}
+            <PortLinks ports={publicPorts(services.flatMap((c) => c.Ports ?? []))} />
+          </>
+        ),
+      }
+    }),
+    ...(deployments.data ?? []).map((d) => {
+      const c = d.container_id ? byId.get(d.container_id) : undefined
+      return {
+        kind: 'deployment' as const,
+        name: d.name,
+        status: d.status,
+        pinned: d.pinned,
+        groupId: d.group_id,
+        to: `/deployments/${d.name}`,
+        icon: d.source === 'git' ? <GithubIcon className="size-4.5" /> : <Box className="size-4.5" />,
+        body: (
+          <>
+            {d.source === 'git' ? (
+              <div className="space-y-1 text-xs">
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <span className="truncate font-medium text-foreground/90">{repoLabel(d.git_url)}</span>
+                  <GitBranch className="size-3 shrink-0" />
+                  <span className="truncate font-mono">{d.git_branch}</span>
+                </div>
+                {d.last_commit && (
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                    <span className="font-mono text-brand">{d.last_commit.slice(0, 7)}</span>
+                    <span className="truncate">{d.last_commit_message}</span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="truncate font-mono text-xs text-muted-foreground">{d.image}</p>
+            )}
+            <PortLinks ports={c ? publicPorts(c.Ports ?? []) : []} />
+          </>
+        ),
+      }
+    }),
+  ].sort((a, b) => a.name.localeCompare(b.name))
+
+  // Pinned services show only in Pinned; a group that no longer exists counts as none.
+  const groupIds = new Set((groups.data ?? []).map((g) => g.id))
+  const pinned = items.filter((i) => i.pinned)
+  const grouped = (id: number) => items.filter((i) => !i.pinned && i.groupId === id)
+  const ungrouped = items.filter((i) => !i.pinned && (i.groupId === null || !groupIds.has(i.groupId)))
+  const card = (i: (typeof items)[number]) => (
+    <ServiceCard key={`${i.kind}-${i.name}`} item={i} groups={groups.data ?? []} icon={i.icon} selected={pathname === i.to}>
+      {i.body}
+    </ServiceCard>
+  )
+
   const loading = stacks.isLoading || deployments.isLoading
   const empty = !loading && !stacks.data?.length && !deployments.data?.length
 
@@ -170,85 +239,54 @@ export function CanvasPage() {
             <EmptyCanvas />
           </div>
         ) : (
-          <div className="flex flex-wrap justify-center gap-5 pb-24 sm:justify-start">
-            {stacks.data?.map((s) => {
-              const services = byProject.get(s.name) ?? []
+          <div className="space-y-8 pb-24">
+            {pinned.length > 0 && (
+              <Section title="Pinned" icon={<Pin className="size-3.5 text-brand" />}>
+                <Grid>{pinned.map(card)}</Grid>
+              </Section>
+            )}
+            {(groups.data ?? []).map((g, i) => {
+              const items = grouped(g.id)
               return (
-                <ServiceCard
-                  key={`s-${s.name}`}
-                  to={`/stacks/${s.name}`}
-                  icon={s.source === 'git' ? <GithubIcon className="size-4.5" /> : <Layers className="size-4.5" />}
-                  name={s.name}
-                  status={s.status}
-                  selected={pathname === `/stacks/${s.name}`}
-                >
-                  {s.source === 'git' && (
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <span className="truncate font-medium text-foreground/90">{repoLabel(s.git_url)}</span>
-                      <GitBranch className="size-3 shrink-0" />
-                      <span className="truncate font-mono">{s.git_branch}</span>
-                      {s.last_commit && <span className="shrink-0 font-mono text-brand">{s.last_commit.slice(0, 7)}</span>}
-                    </div>
-                  )}
-                  {services.length ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {services.map((c) => (
-                        <span key={c.Id} className="inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-1.5 py-0.5 text-xs">
-                          <StatusDot status={c.State} className="size-1.5" />
-                          {c.Labels['com.docker.compose.service'] ?? containerName(c.Names)}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">Compose stack · not running</p>
-                  )}
-                  <PortLinks ports={publicPorts(services.flatMap((c) => c.Ports ?? []))} />
-                </ServiceCard>
+                <GroupSection key={g.id} group={g} index={i} groups={groups.data ?? []} items={items}>
+                  <Grid>{items.map(card)}</Grid>
+                </GroupSection>
               )
             })}
-            {deployments.data?.map((d) => {
-              const c = d.container_id ? byId.get(d.container_id) : undefined
-              return (
-                <ServiceCard
-                  key={`d-${d.name}`}
-                  to={`/deployments/${d.name}`}
-                  icon={d.source === 'git' ? <GithubIcon className="size-4.5" /> : <Box className="size-4.5" />}
-                  name={d.name}
-                  status={d.status}
-                  selected={pathname === `/deployments/${d.name}`}
-                >
-                  {d.source === 'git' ? (
-                    <div className="space-y-1 text-xs">
-                      <div className="flex items-center gap-1.5 text-muted-foreground">
-                        <span className="truncate font-medium text-foreground/90">{repoLabel(d.git_url)}</span>
-                        <GitBranch className="size-3 shrink-0" />
-                        <span className="truncate font-mono">{d.git_branch}</span>
-                      </div>
-                      {d.last_commit && (
-                        <div className="flex items-center gap-1.5 text-muted-foreground">
-                          <span className="font-mono text-brand">{d.last_commit.slice(0, 7)}</span>
-                          <span className="truncate">{d.last_commit_message}</span>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="truncate font-mono text-xs text-muted-foreground">{d.image}</p>
-                  )}
-                  <PortLinks ports={c ? publicPorts(c.Ports ?? []) : []} />
-                </ServiceCard>
-              )
-            })}
-            <button
-              onClick={() => create()}
-              className="flex min-h-40 w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed text-sm text-muted-foreground transition-colors hover:border-brand/50 hover:bg-card/50 hover:text-foreground sm:w-72"
+            <Section
+              title={pinned.length || groups.data?.length ? 'Other services' : 'Services'}
+              actions={
+                <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setNewGroup(true)}>
+                  <FolderPlus /> New group
+                </Button>
+              }
             >
-              <Plus className="size-5" />
-              Add a service
-            </button>
+              <Grid>
+                {ungrouped.map(card)}
+                <button
+                  onClick={() => create()}
+                  className="flex min-h-40 w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed text-sm text-muted-foreground transition-colors hover:border-brand/50 hover:bg-card/50 hover:text-foreground sm:w-72"
+                >
+                  <Plus className="size-5" />
+                  Add a service
+                </button>
+              </Grid>
+            </Section>
           </div>
         )}
       </div>
       <Outlet />
+      <GroupNameDialog
+        open={newGroup}
+        onOpenChange={setNewGroup}
+        title="New group"
+        submitLabel="Create group"
+        onSubmit={(name) => createGroup.mutate(name, { onSuccess: () => setNewGroup(false) })}
+      />
     </div>
   )
+}
+
+function Grid({ children }: { children: ReactNode }) {
+  return <div className="flex flex-wrap justify-center gap-5 sm:justify-start">{children}</div>
 }

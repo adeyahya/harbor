@@ -214,7 +214,14 @@ export function ContainerDetails({ c }: { c: ContainerInspect }) {
         {c.Mounts.length
           ? c.Mounts.map((m) => (
               <div key={m.Destination} className={mono}>
-                {m.Name ?? m.Source} → {m.Destination} {!m.RW && <span className="text-muted-foreground">(ro)</span>}
+                {m.Type === 'volume' && m.Name ? (
+                  <Link to={`/volumes/${encodeURIComponent(m.Name)}`} className="text-brand hover:underline" title="Browse this volume">
+                    {m.Name}
+                  </Link>
+                ) : (
+                  (m.Name ?? m.Source)
+                )}{' '}
+                → {m.Destination} {!m.RW && <span className="text-muted-foreground">(ro)</span>}
               </div>
             ))
           : '—'}

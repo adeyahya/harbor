@@ -1,6 +1,9 @@
 import { Box, Check, Copy, Eye, EyeOff, FileCode2, KeyRound, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { repoLabel, type Deployment, type DeploymentSource, type Stack, type StackSource } from '@/api'
+import { Link } from 'react-router'
+import { gitHost, repoLabel, type Deployment, type DeploymentSource, type Stack, type StackSource } from '@/api'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { useGitAccounts } from '@/pages/Settings'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -10,7 +13,10 @@ import { cn } from '@/lib/utils'
 import { GithubIcon } from './GithubIcon'
 import { SettingsSection } from './panel'
 
-export type SourceConfig = Pick<Deployment, 'source' | 'image' | 'git_url' | 'git_branch' | 'build_context' | 'dockerfile' | 'build_args' | 'auto_deploy'>
+export type SourceConfig = Pick<
+  Deployment,
+  'source' | 'image' | 'git_url' | 'git_branch' | 'build_context' | 'dockerfile' | 'build_args' | 'auto_deploy' | 'git_account_id'
+>
 
 function Field({ label, hint, children, htmlFor }: { label: string; hint?: ReactNode; children: ReactNode; htmlFor?: string }) {
   return (
@@ -45,51 +51,94 @@ function CopyField({ value, secret = false }: { value: string; secret?: boolean 
   )
 }
 
-/** Access token input that never shows a saved token: set / replace / remove. */
-function TokenField({ hasToken, token, onTokenChange }: { hasToken: boolean; token: string | null; onTokenChange: (t: string | null) => void }) {
-  const [replacing, setReplacing] = useState(false)
-  const tokenState = token === '' ? 'cleared' : hasToken && token === null && !replacing ? 'set' : 'input'
+/**
+ * Which git account a service uses: automatic (the account for the repo's
+ * host), a specific one, or none. Also lets a service drop a token it saved
+ * before accounts existed.
+ */
+function AccountField({
+  url,
+  value,
+  onChange,
+  hasToken,
+  token,
+  onTokenChange,
+}: {
+  url: string
+  value: number | null
+  onChange: (v: number | null) => void
+  hasToken: boolean
+  token: string | null
+  onTokenChange: (t: string | null) => void
+}) {
+  const accounts = useGitAccounts().data ?? []
+  const host = gitHost(url)
+  const auto = accounts.find((a) => a.host === host)
+  const selected = value === null ? 'auto' : value === 0 ? 'none' : String(value)
   return (
-          <Field
-      label="Access token"
+    <Field
+      label="Git account"
       hint={
-        <>
-          Needed for private repos: a GitHub fine-grained token with read access to contents. It's stored on the server and never shown again.
-        </>
+        value === null ? (
+          auto ? (
+            <>
+              Uses <span className="font-medium text-foreground">{auto.name}</span>, the account for {host}.
+            </>
+          ) : (
+            <>
+              No account for {host ?? 'this host'}, so the repository is accessed without credentials.{' '}
+              <Link to="/settings" className="text-brand hover:underline">
+                Add one in Settings
+              </Link>{' '}
+              for private repositories.
+            </>
+          )
+        ) : value === 0 ? (
+          'Accessed without credentials. Works for public repositories.'
+        ) : (
+          <>
+            Manage accounts in{' '}
+            <Link to="/settings" className="text-brand hover:underline">
+              Settings
+            </Link>
+            .
+          </>
+        )
       }
-      htmlFor="src-token"
     >
-      {tokenState === 'set' ? (
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border bg-muted/40 px-3 text-sm text-muted-foreground">
-            <KeyRound className="size-3.5 text-success" /> Token saved
-          </div>
-          <Button type="button" variant="outline" size="sm" onClick={() => setReplacing(true)}>
-            Replace
-          </Button>
-          <Button type="button" variant="ghost" size="sm" className="text-destructive" onClick={() => onTokenChange('')}>
-            <X /> Remove
-          </Button>
+      <Select value={selected} onValueChange={(v) => onChange(v === 'auto' ? null : v === 'none' ? 0 : Number(v))}>
+        <SelectTrigger className="w-full sm:w-80">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="auto">Automatic{auto ? ` (${auto.name})` : ''}</SelectItem>
+          {accounts.map((a) => (
+            <SelectItem key={a.id} value={String(a.id)}>
+              {a.name} · {a.host}
+            </SelectItem>
+          ))}
+          <SelectItem value="none">None (public repository)</SelectItem>
+        </SelectContent>
+      </Select>
+      {hasToken && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+          <KeyRound className="size-3.5" />
+          {token === '' ? (
+            <>
+              <span className="flex-1">This service's own token will be removed on save.</span>
+              <Button type="button" variant="ghost" size="xs" onClick={() => onTokenChange(null)}>
+                Undo
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="flex-1">This service has its own token from before git accounts; it's used only when no account applies.</span>
+              <Button type="button" variant="ghost" size="xs" className="text-destructive" onClick={() => onTokenChange('')}>
+                <X /> Remove
+              </Button>
+            </>
+          )}
         </div>
-      ) : tokenState === 'cleared' ? (
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 flex-1 items-center rounded-lg border border-dashed px-3 text-sm text-muted-foreground">Token will be removed on save</div>
-          <Button type="button" variant="ghost" size="sm" onClick={() => onTokenChange(null)}>
-            Undo
-          </Button>
-        </div>
-      ) : (
-        <Input
-          id="src-token"
-          type="password"
-          autoComplete="off"
-          value={token ?? ''}
-          // An empty field means "no change"; removing uses the Remove button.
-          onChange={(e) => onTokenChange(e.target.value === '' ? null : e.target.value)}
-          placeholder={hasToken ? 'Paste the new token' : 'Optional, for private repositories'}
-          className="font-mono"
-          autoFocus={replacing}
-        />
       )}
     </Field>
   )
@@ -162,7 +211,14 @@ export function SourceSettings({
           <Field label="Build arguments" hint={<>One <code>KEY=value</code> per line, passed as <code>--build-arg</code>.</>} htmlFor="src-args">
             <Textarea id="src-args" value={config.build_args} onChange={(e) => set('build_args')(e.target.value)} rows={3} placeholder="NODE_ENV=production" className="font-mono text-[12.5px]" />
           </Field>
-          <TokenField hasToken={hasToken} token={token} onTokenChange={onTokenChange} />
+          <AccountField
+            url={config.git_url}
+            value={config.git_account_id}
+            onChange={set('git_account_id')}
+            hasToken={hasToken}
+            token={token}
+            onTokenChange={onTokenChange}
+          />
         </div>
       )}
     </SettingsSection>
@@ -215,7 +271,7 @@ export function AutoDeploySettings({
   )
 }
 
-export type StackSourceConfig = Pick<Stack, 'source' | 'git_url' | 'git_branch' | 'compose_path' | 'project_dir'>
+export type StackSourceConfig = Pick<Stack, 'source' | 'git_url' | 'git_branch' | 'compose_path' | 'project_dir' | 'git_account_id'>
 
 /** Inline compose vs. git repository for a stack, plus its project directory. */
 export function StackSourceSettings({
@@ -270,7 +326,14 @@ export function StackSourceSettings({
             <Field label="Compose file" hint="Path inside the repository. Relative paths in it resolve against its folder." htmlFor="st-path">
               <Input id="st-path" value={config.compose_path} onChange={(e) => set('compose_path')(e.target.value)} placeholder="compose.yaml" className="font-mono" />
             </Field>
-            <TokenField hasToken={hasToken} token={token} onTokenChange={onTokenChange} />
+            <AccountField
+              url={config.git_url}
+              value={config.git_account_id}
+              onChange={set('git_account_id')}
+              hasToken={hasToken}
+              token={token}
+              onTokenChange={onTokenChange}
+            />
           </>
         )}
         <Field

@@ -1,5 +1,7 @@
 mod assets;
+mod accounts;
 mod auth;
+mod canvas;
 mod deployments;
 mod docker;
 mod error;
@@ -11,6 +13,7 @@ mod stacks;
 mod state;
 mod system;
 mod updates;
+mod volume_browser;
 
 use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
 
@@ -70,7 +73,9 @@ async fn main() -> anyhow::Result<()> {
         host_stats,
         locks: Default::default(),
         listen_port: addr.port(),
+        helpers: Default::default(),
     };
+    volume_browser::init(&state).await;
 
     deployments::spawn_poller(state.clone());
 
@@ -80,6 +85,8 @@ async fn main() -> anyhow::Result<()> {
         .nest("/stacks", stacks::router())
         .nest("/deployments", deployments::router())
         .nest("/ports", ports::router())
+        .nest("/canvas", canvas::router())
+        .nest("/settings/git-accounts", accounts::router())
         .nest("/import", import::router())
         .nest("/updates", updates::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_user));

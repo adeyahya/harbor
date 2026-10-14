@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronsUpDown, LogOut, Moon, Plus, Search, Server, Sun } from 'lucide-react'
+import { ChevronsUpDown, LogOut, Moon, Plus, Search, Server, Settings, Sun } from 'lucide-react'
 import { useTheme } from 'next-themes'
-import { NavLink, Outlet } from 'react-router'
+import { NavLink, Outlet, useNavigate } from 'react-router'
 import { api, type AuthStatus, type SystemOverview, type User } from '@/api'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
@@ -57,6 +57,7 @@ export function Layout({ user }: { user: User }) {
   const openCommand = useCommandMenu()
   const create = useCreate()
   const { resolvedTheme, setTheme } = useTheme()
+  const navigate = useNavigate()
   const system = useQuery({ queryKey: ['system'], queryFn: () => api.get<SystemOverview>('/system'), refetchInterval: 5000 })
   const hostname = system.data?.host.hostname?.replace(/\.local$/, '') || 'local'
   const dockerOk = system.data ? !!system.data.docker : true
@@ -111,6 +112,9 @@ export function Layout({ user }: { user: User }) {
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>
+                  <DropdownMenuItem onSelect={() => navigate('/settings')}>
+                    <Settings /> Settings
+                  </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}>
                     {resolvedTheme === 'dark' ? <Sun /> : <Moon />} {resolvedTheme === 'dark' ? 'Light' : 'Dark'} theme
                   </DropdownMenuItem>

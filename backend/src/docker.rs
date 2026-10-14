@@ -35,7 +35,10 @@ pub fn router() -> Router<AppState> {
         .route("/image-ports", get(image_ports))
         .route("/images/{id}", delete(remove_image))
         .route("/volumes", get(list_volumes))
-        .route("/volumes/{name}", delete(remove_volume))
+        .route("/volumes/{name}", get(crate::volume_browser::detail).delete(remove_volume))
+        .route("/volumes/{name}/files", get(crate::volume_browser::list))
+        .route("/volumes/{name}/file", get(crate::volume_browser::preview))
+        .route("/volumes/{name}/download", get(crate::volume_browser::download))
         .route("/networks", get(list_networks))
         .route("/networks/{id}", delete(remove_network))
         .route("/prune/{kind}", post(prune))
@@ -66,6 +69,8 @@ async fn list_containers(State(state): State<AppState>) -> AppResult<Json<Vec<Co
             ..Default::default()
         }))
         .await?;
+    // Harbor's own helper containers aren't the user's.
+    containers.retain(|c| !crate::volume_browser::is_helper(c));
     containers.sort_by(|a, b| a.names.cmp(&b.names));
     Ok(Json(containers))
 }
@@ -255,6 +260,8 @@ async fn remove_volume(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> AppResult<Json<Value>> {
+    // A browser helper mounting the volume would make removal fail.
+    crate::volume_browser::release(&state, &name).await;
     state
         .docker
         .remove_volume(&name, Some(RemoveVolumeOptions::default()))
@@ -286,6 +293,9 @@ async fn prune(
 ) -> AppResult<Json<Update>> {
     if !matches!(kind.as_str(), "containers" | "images" | "volumes" | "networks") {
         return Err(crate::error::AppError::bad_request(format!("cannot prune '{kind}'")));
+    }
+    if kind == "volumes" {
+        crate::volume_browser::release_all(&state).await;
     }
     let docker = state.docker.clone();
     let k = kind.clone();

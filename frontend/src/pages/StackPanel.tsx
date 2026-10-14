@@ -20,7 +20,7 @@ import { containerName, timeAgo } from '@/lib/format'
 
 const TABS = ['deployments', 'services', 'logs', 'variables', 'settings'] as const
 
-const FIELDS = ['compose', 'env', 'source', 'git_url', 'git_branch', 'compose_path', 'project_dir', 'auto_deploy'] as const satisfies readonly (keyof Stack)[]
+const FIELDS = ['compose', 'env', 'source', 'git_url', 'git_branch', 'compose_path', 'project_dir', 'auto_deploy', 'git_account_id'] as const satisfies readonly (keyof Stack)[]
 type Config = Pick<Stack, (typeof FIELDS)[number]>
 const pick = (s: Stack) => Object.fromEntries(FIELDS.map((f) => [f, s[f]])) as Config
 
@@ -127,7 +127,7 @@ function StackPanelInner({ name }: { name: string }) {
         { id: 'services', label: `Services${data.containers.length ? ` · ${data.containers.length}` : ''}` },
         { id: 'logs', label: 'Logs' },
         { id: 'variables', label: `Variables${dot(['env'])}` },
-        { id: 'settings', label: `Settings${dot(['compose', 'source', 'git_url', 'git_branch', 'compose_path', 'project_dir', 'auto_deploy', 'git_token'])}` },
+        { id: 'settings', label: `Settings${dot(['compose', 'source', 'git_url', 'git_branch', 'compose_path', 'project_dir', 'auto_deploy', 'git_account_id', 'git_token'])}` },
       ]}
       tab={tab}
       onTabChange={setTab}

@@ -67,6 +67,17 @@ pub struct Deployment {
     pub adopted_container: String,
     /// Extra container labels, `KEY=value` per line.
     pub labels: String,
+    pub pinned: bool,
+    pub group_id: Option<i64>,
+    /// Git account for the repository; None picks the one for its host.
+    pub git_account_id: Option<i64>,
+}
+
+impl Deployment {
+    /// Token for the repository (account, else the legacy per-service token).
+    async fn token(&self, db: &sqlx::SqlitePool) -> String {
+        crate::accounts::resolve_token(db, &self.git_url, self.git_account_id, &self.git_token).await
+    }
 }
 
 fn is_set<S: Serializer>(value: &str, s: S) -> Result<S::Ok, S::Error> {
@@ -143,6 +154,8 @@ struct DeploymentInput {
     auto_deploy: bool,
     #[serde(default)]
     labels: String,
+    #[serde(default)]
+    git_account_id: Option<i64>,
 }
 
 fn default_source() -> String {
@@ -281,13 +294,14 @@ async fn detail(State(state): State<AppState>, Path(name): Path<String>) -> AppR
 }
 
 /// Fills in the default branch when a git deployment doesn't name one.
-async fn resolve_branch(input: &mut DeploymentInput, stored_token: &str) -> AppResult<()> {
+async fn resolve_branch(state: &AppState, input: &mut DeploymentInput, stored_token: &str) -> AppResult<()> {
     if input.source != "git" {
         return Ok(());
     }
     let url = git::normalize_url(&input.git_url);
-    let token = input.git_token.as_deref().unwrap_or(stored_token);
-    input.git_branch = git::resolve_branch(&url, &input.git_branch, token).await.map_err(AppError::bad_request)?;
+    let fallback = input.git_token.as_deref().unwrap_or(stored_token);
+    let token = crate::accounts::resolve_token(&state.db, &url, input.git_account_id, fallback).await;
+    input.git_branch = git::resolve_branch(&url, &input.git_branch, &token).await.map_err(AppError::bad_request)?;
     Ok(())
 }
 
@@ -320,13 +334,13 @@ fn validate(input: &mut DeploymentInput) -> AppResult<()> {
 async fn create(State(state): State<AppState>, Json(mut input): Json<DeploymentInput>) -> AppResult<Json<Deployment>> {
     let name = input.name.clone().unwrap_or_default();
     validate_name(&name)?;
-    resolve_branch(&mut input, "").await?;
+    resolve_branch(&state, &mut input, "").await?;
     validate(&mut input)?;
     let ts = now();
     let d = sqlx::query_as::<_, Deployment>(
         "INSERT INTO deployments (name, image, ports, env, volumes, network, restart, command, created_at, updated_at,
-           source, git_url, git_branch, build_context, dockerfile, build_args, git_token, auto_deploy, webhook_secret, labels)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+           source, git_url, git_branch, build_context, dockerfile, build_args, git_token, auto_deploy, webhook_secret, labels, git_account_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .bind(&name)
     .bind(input.image.trim())
@@ -348,6 +362,7 @@ async fn create(State(state): State<AppState>, Json(mut input): Json<DeploymentI
     .bind(input.auto_deploy)
     .bind(hex::encode(rand::random::<[u8; 20]>()))
     .bind(&input.labels)
+    .bind(input.git_account_id)
     .fetch_one(&state.db)
     .await?;
     Ok(Json(d))
@@ -359,7 +374,7 @@ async fn update(
     Json(mut input): Json<DeploymentInput>,
 ) -> AppResult<Json<Deployment>> {
     let existing = fetch(&state, &name).await?;
-    resolve_branch(&mut input, &existing.git_token).await?;
+    resolve_branch(&state, &mut input, &existing.git_token).await?;
     validate(&mut input)?;
     let d = sqlx::query_as::<_, Deployment>(
         // A git deployment's image is set by its builds, not by the client.
@@ -367,7 +382,7 @@ async fn update(
            image = CASE WHEN ?1 = 'git' THEN image ELSE ?2 END,
            ports = ?3, env = ?4, volumes = ?5, network = ?6, restart = ?7, command = ?8, updated_at = ?9,
            source = ?1, git_url = ?10, git_branch = ?11, build_context = ?12, dockerfile = ?13, build_args = ?14,
-           git_token = COALESCE(?15, git_token), auto_deploy = ?16, labels = ?18
+           git_token = COALESCE(?15, git_token), auto_deploy = ?16, labels = ?18, git_account_id = ?19
          WHERE name = ?17 RETURNING *",
     )
     .bind(&input.source)
@@ -388,6 +403,7 @@ async fn update(
     .bind(input.auto_deploy)
     .bind(&name)
     .bind(&input.labels)
+    .bind(input.git_account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::not_found(format!("deployment '{name}' not found")))?;
@@ -478,7 +494,8 @@ async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, roll
 /// deploys the result.
 async fn build_and_deploy(state: &AppState, log: &UpdateLog, d: &Deployment) -> anyhow::Result<()> {
     let checkout = state.builds_dir().join(&d.name);
-    let commit = git::clone(log, &d.git_url, &d.git_branch, &d.git_token, &checkout).await?;
+    let token = d.token(&state.db).await;
+    let commit = git::clone(log, &d.git_url, &d.git_branch, &token, &checkout).await?;
     log.line(format!("checked out {} \"{}\"", commit.short(), commit.message)).await;
     log.set_detail(&format!("{} {}", commit.short(), commit.message)).await;
     sqlx::query("UPDATE deployments SET last_seen_commit = ? WHERE id = ?")
@@ -836,7 +853,7 @@ async fn poll_one(state: &AppState, d: Deployment) -> anyhow::Result<()> {
     }
     let head = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        git::remote_head(&d.git_url, &d.git_branch, &d.git_token),
+        git::remote_head(&d.git_url, &d.git_branch, &d.token(&state.db).await),
     )
     .await
     .map_err(|_| anyhow::anyhow!("timed out checking {}", d.name))??;

@@ -40,6 +40,7 @@ const FIELDS = [
   'build_args',
   'auto_deploy',
   'labels',
+  'git_account_id',
 ] as const satisfies readonly (keyof Deployment)[]
 type Config = Pick<Deployment, (typeof FIELDS)[number]>
 const SETTINGS_FIELDS: (keyof Config)[] = FIELDS.filter((f) => f !== 'env')

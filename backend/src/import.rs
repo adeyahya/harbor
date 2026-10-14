@@ -152,7 +152,7 @@ async fn candidates(State(state): State<AppState>) -> AppResult<Json<Candidates>
 
     let mut projects: BTreeMap<String, Vec<&ContainerSummary>> = BTreeMap::new();
     let mut standalone = Vec::new();
-    for c in &containers {
+    for c in containers.iter().filter(|c| !crate::volume_browser::is_helper(c)) {
         let managed = label(c, "harbor.deployment").is_some() || deployment_names.contains(&name_of(c));
         match label(c, PROJECT) {
             Some(p) if !stack_names.contains(p) && !managed => projects.entry(p.to_string()).or_default().push(c),

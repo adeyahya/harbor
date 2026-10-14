@@ -184,6 +184,10 @@ export interface Stack {
   webhook_secret: string
   last_commit: string
   last_commit_message: string
+  pinned: boolean
+  group_id: number | null
+  /** null = automatic (account for the repo's host), 0 = none. */
+  git_account_id: number | null
 }
 
 export interface StackListItem extends Stack {
@@ -228,6 +232,10 @@ export interface Deployment {
   adopted_container: string
   /** Extra container labels, KEY=value per line. */
   labels: string
+  pinned: boolean
+  group_id: number | null
+  /** null = automatic (account for the repo's host), 0 = none. */
+  git_account_id: number | null
 }
 
 /** `owner/repo` for GitHub URLs, otherwise the URL itself. */
@@ -294,4 +302,62 @@ export interface ContainerImportPreview {
   command: string
   labels: string
   warnings: string[]
+}
+
+export interface CanvasGroup {
+  id: number
+  name: string
+  position: number
+  collapsed: boolean
+}
+
+export interface GitAccount {
+  id: number
+  name: string
+  host: string
+  username: string
+  has_token: boolean
+  created_at: string
+}
+
+/** Host of a git URL (https, ssh or scp-style), lowercased. */
+export function gitHost(url: string): string | null {
+  const u = url.trim()
+  if (!u) return null
+  if (/^[\w.-]+\/[\w.-]+$/.test(u)) return 'github.com' // owner/repo shorthand
+  const rest = u.includes('://') ? u.split('://')[1] : u.includes('@') ? u.split('@')[1] : null
+  if (!rest) return null
+  const host = rest.split('@').pop()!.split(/[/:]/)[0].toLowerCase()
+  return host || null
+}
+
+export interface VolumeDetail {
+  name: string
+  driver: string
+  mountpoint: string
+  created_at: string | null
+  labels: Record<string, string>
+  used_by: { id: string; name: string; state: string; destination: string }[]
+}
+
+export interface VolumeEntry {
+  name: string
+  kind: 'dir' | 'file' | 'link' | 'other'
+  size: number
+  /** Unix seconds. */
+  modified: number
+  mode: string
+}
+
+export interface VolumeListing {
+  path: string
+  entries: VolumeEntry[]
+  truncated: boolean
+}
+
+export interface VolumeFilePreview {
+  path: string
+  content: string | null
+  binary: boolean
+  truncated: boolean
 }

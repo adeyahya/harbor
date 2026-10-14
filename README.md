@@ -10,6 +10,8 @@ design, compiled into the backend binary.
 - **Canvas**: every stack and deployment as a card with live status, services
   and published ports, plus host CPU/memory/disk. Clicking a card opens its
   panel with Deployments, Logs, Variables and Settings tabs. Press ⌘K to search.
+  Pin important services to the top and put the rest in named, collapsible
+  groups (⋯ on a card); the layout is stored on the server.
 - **Stacks**: Docker Compose projects. The compose file is either edited in the
   UI or comes from a **git repository** (with auto-deploy on push, like
   deployments). Variables are written to a `.env` file; deploy, pull, restart,
@@ -32,7 +34,14 @@ design, compiled into the backend binary.
   settings it ran with. Rolling back reruns that image with those settings, with
   no rebuild or pull. Stacks roll back their compose file and variables.
 - **Containers**: list, start/stop/restart/remove, live log streaming, inspect.
-- **Images, volumes, networks**: list, remove, prune.
+- **Images, volumes, networks**: list, remove, prune. Click a volume to browse its
+  files read-only: folders, text previews, image previews and downloads. Harbor
+  reads volumes through a small `alpine` helper container (pulled on first use,
+  removed after 10 minutes idle, hidden from Harbor's lists), so it works
+  even when volume data lives in a VM, as with Docker Desktop.
+- **Git accounts** (Settings): credentials stored once and used by every
+  git-backed service. Services use the account for their repository's host
+  automatically, or a specific one, or none.
 - **Import existing containers** (e.g. from Komodo): compose projects become
   stacks and standalone containers become deployments, without restarting
   anything. See [Moving from Komodo](#moving-from-komodo).
@@ -180,6 +189,7 @@ Then open http://localhost:5173.
 | `HARBOR_DATA_DIR` | `./data`         | SQLite database and stack files (`/var/lib/harbor` in the Docker image). |
 | `DOCKER_HOST`     | active context   | Docker engine to manage (`unix:///var/run/docker.sock` in the Docker image). |
 | `HARBOR_GIT_POLL_SECS` | `60`        | How often auto-deploy checks branches for new commits. `0` disables polling. |
+| `HARBOR_HELPER_IDLE_SECS` | `600`    | How long an idle volume-browser helper container is kept. |
 | `RUST_LOG`        | `harbor=info`    | Log filter.                                  |
 
 ## Moving from Komodo
@@ -223,9 +233,12 @@ volumes:
 
 1. **Create → GitHub repo**, enter `owner/repo` (leave the branch empty to use
    the default branch), then set ports and variables in the service's Settings.
-2. **Private repos:** add a [fine-grained token](https://github.com/settings/personal-access-tokens)
-   with read-only *Contents* access in Settings → Source → Access token. It's
-   stored in Harbor's database and never sent back to the browser.
+2. **Private repos:** add a GitHub account under **Settings → Git accounts**
+   with a [fine-grained token](https://github.com/settings/personal-access-tokens)
+   that has read-only *Contents* access. Every service whose repository is on
+   that host uses it automatically; pick a different account (or none) in a
+   service's Settings. Tokens are stored in Harbor's database and never sent
+   back to the browser.
 3. **Deploy on push:** turn on *Auto-deploy*. Harbor polls the branch (see
    `HARBOR_GIT_POLL_SECS`), which works even when GitHub can't reach your server.
    For instant deploys, add a GitHub webhook pointing at
@@ -261,6 +274,9 @@ backend/
     process.rs     runs git/docker commands with output streamed to updates
     ports.rs       host port availability and suggestions
     import.rs      discovering and importing containers Harbor didn't create
+    canvas.rs      canvas groups and pinning
+    accounts.rs    git accounts and token resolution
+    volume_browser.rs  read-only volume file browser (helper container)
     docker.rs      containers, logs (SSE), images, volumes, networks
     system.rs      host stats collector
     assets.rs      embedded frontend

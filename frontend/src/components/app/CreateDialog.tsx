@@ -156,7 +156,7 @@ function CreateForm({ kind, onBack, onDone }: { kind: Kind; onBack: () => void; 
                 autoFocus
                 required
               />
-              <p className="text-xs text-muted-foreground">Private repo? Add an access token in Settings after creating.</p>
+              <p className="text-xs text-muted-foreground">Private repositories use your git accounts from Settings.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="create-branch">Branch</Label>

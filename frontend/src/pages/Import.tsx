@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Box, GitBranch, Info, Layers, PackageOpen, TriangleAlert } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import {
   api,
   ApiError,
+  gitHost,
   repoLabel,
   type ContainerImportPreview,
   type Deployment,
@@ -15,6 +16,7 @@ import {
   type Stack,
 } from '@/api'
 import { GithubIcon } from '@/components/app/GithubIcon'
+import { ImportAllDialog } from '@/components/app/ImportAll'
 import { EmptyState, ErrorAlert, Loading, Page, PageHeader, Surface } from '@/components/app/page'
 import { StatusDot } from '@/components/app/status'
 import { Button } from '@/components/ui/button'
@@ -23,6 +25,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { useGitAccounts } from '@/pages/Settings'
 import { cn } from '@/lib/utils'
 
 export function useImportCandidates() {
@@ -63,6 +66,7 @@ export function ImportPage() {
   const { data, isLoading, error } = useImportCandidates()
   const [stack, setStack] = useState<ImportStackCandidate | null>(null)
   const [container, setContainer] = useState<ImportContainerCandidate | null>(null)
+  const [all, setAll] = useState(false)
 
   const stacks = data?.stacks ?? []
   const containers = data?.containers ?? []
@@ -72,6 +76,14 @@ export function ImportPage() {
       <PageHeader
         title="Import"
         description="Containers on this server that Harbor doesn't manage yet, such as ones created by Komodo or by hand. Importing adds them to the canvas without restarting them."
+        actions={
+          data &&
+          stacks.length + containers.length > 1 && (
+            <Button onClick={() => setAll(true)}>
+              <PackageOpen /> Import all
+            </Button>
+          )
+        }
       />
       <ErrorAlert error={error} className="mb-4" />
       {isLoading ? (
@@ -161,6 +173,7 @@ export function ImportPage() {
           )}
         </div>
       )}
+      {data && <ImportAllDialog candidates={data} open={all} onOpenChange={setAll} />}
       <ImportStackDialog candidate={stack} onClose={() => setStack(null)} />
       <ImportContainerDialog candidate={container} onClose={() => setContainer(null)} />
     </Page>
@@ -193,7 +206,6 @@ function ImportStackForm({ candidate, onClose }: { candidate: ImportStackCandida
   const [useGit, setUseGit] = useState(!!candidate.git_url)
   const [gitUrl, setGitUrl] = useState(candidate.git_url ?? '')
   const [branch, setBranch] = useState(candidate.git_branch ?? '')
-  const [token, setToken] = useState('')
   const [compose, setCompose] = useState('')
   const needsPaste = !candidate.compose_readable && !useGit
 
@@ -202,7 +214,7 @@ function ImportStackForm({ candidate, onClose }: { candidate: ImportStackCandida
       api.post<Stack>('/import/stack', {
         project: candidate.project,
         compose: needsPaste ? compose : undefined,
-        git: useGit ? { git_url: gitUrl, git_branch: branch, git_token: token || undefined } : undefined,
+        git: useGit ? { git_url: gitUrl, git_branch: branch } : undefined,
       }),
     onSuccess: (s) => {
       qc.invalidateQueries()
@@ -252,12 +264,7 @@ function ImportStackForm({ candidate, onClose }: { candidate: ImportStackCandida
                 <Field label="Branch" hint="Empty uses the repository's default branch.">
                   <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="Default branch" className="font-mono" />
                 </Field>
-                <Field
-                  label="Access token"
-                  hint={candidate.git_had_credentials ? 'The existing checkout had credentials embedded in its URL; Harbor didn\'t copy them. Add a token for private repos.' : 'Needed for private repositories.'}
-                >
-                  <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Optional" className="font-mono" />
-                </Field>
+                <AccountHint url={gitUrl} hadCredentials={candidate.git_had_credentials} />
               </div>
             )}
           </div>
@@ -280,6 +287,31 @@ function ImportStackForm({ candidate, onClose }: { candidate: ImportStackCandida
         </Button>
       </div>
     </form>
+  )
+}
+
+/** Which git account an imported git stack will use. */
+function AccountHint({ url, hadCredentials }: { url: string; hadCredentials: boolean }) {
+  const accounts = useGitAccounts().data ?? []
+  const host = gitHost(url)
+  const account = accounts.find((a) => a.host === host)
+  return (
+    <p className="text-xs text-muted-foreground">
+      {account ? (
+        <>
+          Uses the git account <span className="font-medium text-foreground">{account.name}</span> for {host}.
+        </>
+      ) : (
+        <>
+          No git account for {host ?? 'this host'}
+          {hadCredentials ? " (the checkout's embedded credentials weren't copied)" : ''}. Public repositories work as-is; for private ones,{' '}
+          <Link to="/settings" className="text-brand hover:underline">
+            add an account in Settings
+          </Link>
+          .
+        </>
+      )}
+    </p>
   )
 }
 

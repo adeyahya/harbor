@@ -1,0 +1,135 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+@custom-variant dark (&:is(.dark *));
+
+/* Railway-inspired palette: deep violet-black surfaces, muted purple accent. */
+:root {
+  --background: #fafafb;
+  --foreground: #13111c;
+  --card: #ffffff;
+  --card-foreground: #13111c;
+  --popover: #ffffff;
+  --popover-foreground: #13111c;
+  --primary: #5e4596;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f0f5;
+  --secondary-foreground: #13111c;
+  --muted: #f1f0f5;
+  --muted-foreground: #6b6879;
+  --accent: #eceaf3;
+  --accent-foreground: #13111c;
+  --destructive: #dc3545;
+  --border: #e5e3ec;
+  --input: #dddae6;
+  --ring: #8b6fe0;
+  --brand: #6a4fc2;
+  --success: #17a36b;
+  --warning: #c98a12;
+  --canvas: #f4f3f7;
+  --canvas-dot: rgb(19 17 28 / 0.12);
+  --log: #fbfbfc;
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: #13111c;
+  --foreground: #eeedf3;
+  --card: #1b1925;
+  --card-foreground: #eeedf3;
+  --popover: #1e1c29;
+  --popover-foreground: #eeedf3;
+  --primary: #5e4596;
+  --primary-foreground: #ffffff;
+  --secondary: #24222f;
+  --secondary-foreground: #eeedf3;
+  --muted: #221f2d;
+  --muted-foreground: #9c99ab;
+  --accent: #2a2737;
+  --accent-foreground: #eeedf3;
+  --destructive: #f2555a;
+  --border: #2c2939;
+  --input: #34313f;
+  --ring: #8b6fe0;
+  --brand: #a48cf0;
+  --success: #37cd8f;
+  --warning: #f5b544;
+  --canvas: #100e18;
+  --canvas-dot: rgb(255 255 255 / 0.075);
+  --log: #0e0c15;
+}
+
+@theme inline {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-brand: var(--brand);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-canvas: var(--canvas);
+  --color-log: var(--log);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  html {
+    @apply font-sans;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--brand) 35%, transparent);
+  }
+}
+
+@utility bg-dots {
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}

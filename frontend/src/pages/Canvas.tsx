@@ -1,0 +1,193 @@
+import { useQuery } from '@tanstack/react-query'
+import { Box, Cpu, HardDrive, Layers, MemoryStick, Plus } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { Link, Outlet, useLocation } from 'react-router'
+import { api, type ContainerSummary, type DeploymentListItem, type Port, type StackListItem, type SystemOverview } from '@/api'
+import { useCreate } from '@/components/app/CreateDialog'
+import { ErrorAlert, Loading } from '@/components/app/page'
+import { Status, StatusDot } from '@/components/app/status'
+import { Button } from '@/components/ui/button'
+import { bytes, containerName, percent } from '@/lib/format'
+import { cn } from '@/lib/utils'
+
+function Meter({ icon, label, value, detail }: { icon: ReactNode; label: string; value: number; detail: string }) {
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="mb-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+        {icon}
+        <span className="font-medium text-foreground">{label}</span>
+        <span className="ml-auto truncate font-mono text-[11px]">{detail}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn('h-full rounded-full transition-[width] duration-700', value > 90 ? 'bg-destructive' : value > 75 ? 'bg-warning' : 'bg-brand')}
+          style={{ width: `${Math.min(100, Math.max(2, value))}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+function HostBar({ system }: { system?: SystemOverview }) {
+  const host = system?.host
+  if (!host || host.cpu_count === 0) return null
+  const docker = system.docker
+  return (
+    <div className="flex flex-col gap-4 rounded-xl border bg-card/80 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:gap-6">
+      <div className="shrink-0">
+        <div className="text-sm font-semibold">{host.hostname.replace(/\.local$/, '')}</div>
+        <div className="text-xs text-muted-foreground">{docker ? `Docker ${docker.version} · ${docker.containers_running}/${docker.containers} containers up` : 'Docker unreachable'}</div>
+      </div>
+      <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:gap-5">
+        <Meter icon={<Cpu className="size-3.5" />} label="CPU" value={host.cpu_percent} detail={`${host.cpu_percent.toFixed(0)}% of ${host.cpu_count}`} />
+        <Meter icon={<MemoryStick className="size-3.5" />} label="Memory" value={percent(host.mem_used, host.mem_total)} detail={`${bytes(host.mem_used)} / ${bytes(host.mem_total)}`} />
+        <Meter icon={<HardDrive className="size-3.5" />} label="Disk" value={percent(host.disk_used, host.disk_total)} detail={`${bytes(host.disk_used)} / ${bytes(host.disk_total)}`} />
+      </div>
+    </div>
+  )
+}
+
+function publicPorts(ports: Port[]) {
+  return [...new Set(ports.filter((p) => p.PublicPort).map((p) => p.PublicPort!))].sort((a, b) => a - b)
+}
+
+function PortLinks({ ports }: { ports: number[] }) {
+  if (!ports.length) return null
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1">
+      {ports.slice(0, 3).map((p) => (
+        <a
+          key={p}
+          href={`http://${window.location.hostname}:${p}`}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="truncate font-mono text-[11.5px] text-brand hover:underline"
+        >
+          {window.location.hostname}:{p}
+        </a>
+      ))}
+    </div>
+  )
+}
+
+function ServiceCard({ to, icon, name, selected, children, status }: { to: string; icon: ReactNode; name: string; selected: boolean; children?: ReactNode; status: string }) {
+  return (
+    <Link
+      to={to}
+      data-service-card
+      className={cn(
+        'group flex w-full flex-col rounded-2xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-lg hover:shadow-black/20 sm:w-72',
+        selected && 'border-brand/70 ring-3 ring-brand/20',
+      )}
+    >
+      <div className="flex items-center gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted/60 text-brand">{icon}</div>
+        <div className="min-w-0 flex-1 truncate font-semibold">{name}</div>
+      </div>
+      <div className="mt-3 min-h-10 space-y-2 text-sm">{children}</div>
+      <div className="mt-4 flex items-center border-t pt-3">
+        <Status status={status} />
+      </div>
+    </Link>
+  )
+}
+
+function EmptyCanvas() {
+  const create = useCreate()
+  return (
+    <div className="mx-auto flex max-w-md flex-col items-center rounded-2xl border bg-card/80 px-8 py-12 text-center shadow-xl shadow-black/10 backdrop-blur">
+      <div className="mb-5 grid grid-cols-2 gap-1.5 text-brand">
+        <Layers className="size-5" />
+        <Box className="size-5" />
+        <Box className="size-5 opacity-50" />
+        <Plus className="size-5" />
+      </div>
+      <h2 className="text-xl font-semibold">Nothing deployed yet</h2>
+      <p className="mt-2 text-sm text-muted-foreground">Create a stack from a compose file or deploy a single container from an image.</p>
+      <div className="mt-6 flex gap-2">
+        <Button onClick={() => create('stack')}>
+          <Layers /> New stack
+        </Button>
+        <Button variant="outline" onClick={() => create('deployment')}>
+          <Box /> New deployment
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+export function CanvasPage() {
+  const { pathname } = useLocation()
+  const create = useCreate()
+  const system = useQuery({ queryKey: ['system'], queryFn: () => api.get<SystemOverview>('/system'), refetchInterval: 3000 })
+  const stacks = useQuery({ queryKey: ['stacks'], queryFn: () => api.get<StackListItem[]>('/stacks'), refetchInterval: 4000 })
+  const deployments = useQuery({ queryKey: ['deployments'], queryFn: () => api.get<DeploymentListItem[]>('/deployments'), refetchInterval: 4000 })
+  const containers = useQuery({ queryKey: ['containers'], queryFn: () => api.get<ContainerSummary[]>('/docker/containers'), refetchInterval: 4000 })
+
+  const byProject = new Map<string, ContainerSummary[]>()
+  for (const c of containers.data ?? []) {
+    const p = c.Labels?.['com.docker.compose.project']
+    if (p) byProject.set(p, [...(byProject.get(p) ?? []), c])
+  }
+  const byId = new Map((containers.data ?? []).map((c) => [c.Id, c]))
+  const loading = stacks.isLoading || deployments.isLoading
+  const empty = !loading && !stacks.data?.length && !deployments.data?.length
+
+  return (
+    <div className="bg-dots min-h-full">
+      <div className="mx-auto max-w-6xl space-y-8 px-4 py-6 sm:px-6">
+        <ErrorAlert error={system.data?.docker_error && `Docker is unreachable: ${system.data.docker_error}`} />
+        <HostBar system={system.data} />
+
+        {loading ? (
+          <Loading />
+        ) : empty ? (
+          <div className="pt-10">
+            <EmptyCanvas />
+          </div>
+        ) : (
+          <div className="flex flex-wrap justify-center gap-5 pb-24 sm:justify-start">
+            {stacks.data?.map((s) => {
+              const services = byProject.get(s.name) ?? []
+              return (
+                <ServiceCard key={`s-${s.name}`} to={`/stacks/${s.name}`} icon={<Layers className="size-4.5" />} name={s.name} status={s.status} selected={pathname === `/stacks/${s.name}`}>
+                  {services.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {services.map((c) => (
+                        <span key={c.Id} className="inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-1.5 py-0.5 text-xs">
+                          <StatusDot status={c.State} className="size-1.5" />
+                          {c.Labels['com.docker.compose.service'] ?? containerName(c.Names)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Compose stack · not running</p>
+                  )}
+                  <PortLinks ports={publicPorts(services.flatMap((c) => c.Ports))} />
+                </ServiceCard>
+              )
+            })}
+            {deployments.data?.map((d) => {
+              const c = d.container_id ? byId.get(d.container_id) : undefined
+              return (
+                <ServiceCard key={`d-${d.name}`} to={`/deployments/${d.name}`} icon={<Box className="size-4.5" />} name={d.name} status={d.status} selected={pathname === `/deployments/${d.name}`}>
+                  <p className="truncate font-mono text-xs text-muted-foreground">{d.image}</p>
+                  <PortLinks ports={c ? publicPorts(c.Ports) : []} />
+                </ServiceCard>
+              )
+            })}
+            <button
+              onClick={() => create()}
+              className="flex min-h-40 w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed text-sm text-muted-foreground transition-colors hover:border-brand/50 hover:bg-card/50 hover:text-foreground sm:w-72"
+            >
+              <Plus className="size-5" />
+              Add a service
+            </button>
+          </div>
+        )}
+      </div>
+      <Outlet />
+    </div>
+  )
+}

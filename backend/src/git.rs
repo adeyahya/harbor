@@ -128,6 +128,7 @@ pub async fn build(
     dockerfile: &str,
     build_args: &[String],
     tags: &[String],
+    labels: &[String],
 ) -> anyhow::Result<()> {
     validate_rel_path(context, "root directory").map_err(anyhow::Error::msg)?;
     validate_rel_path(dockerfile, "Dockerfile path").map_err(anyhow::Error::msg)?;
@@ -143,6 +144,9 @@ pub async fn build(
     }
     for arg in build_args {
         cmd.args(["--build-arg", arg]);
+    }
+    for label in labels {
+        cmd.args(["--label", label]);
     }
     cmd.arg(context)
         .current_dir(checkout)

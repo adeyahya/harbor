@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/containers/{id}/logs", get(container_logs))
         .route("/containers/{id}/{action}", post(container_action))
         .route("/images", get(list_images))
+        .route("/image-ports", get(image_ports))
         .route("/images/{id}", delete(remove_image))
         .route("/volumes", get(list_volumes))
         .route("/volumes/{name}", delete(remove_volume))
@@ -208,6 +209,27 @@ async fn list_images(State(state): State<AppState>) -> AppResult<Json<Vec<Value>
     Ok(Json(out))
 }
 
+#[derive(Deserialize)]
+struct ImagePortsQuery {
+    image: String,
+}
+
+/// Ports an image declares with EXPOSE. Only looks at local images; this is
+/// a hint for the UI and never pulls.
+async fn image_ports(State(state): State<AppState>, Query(q): Query<ImagePortsQuery>) -> AppResult<Json<Value>> {
+    match state.docker.inspect_image(&q.image).await {
+        Ok(img) => {
+            let mut exposed = img.config.and_then(|c| c.exposed_ports).unwrap_or_default();
+            exposed.sort();
+            Ok(Json(json!({ "local": true, "exposed": exposed })))
+        }
+        Err(bollard::errors::Error::DockerResponseServerError { status_code: 404, .. }) => {
+            Ok(Json(json!({ "local": false, "exposed": [] })))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 async fn remove_image(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -277,10 +299,11 @@ async fn prune(
             "images" => serde_json::to_string_pretty(
                 &docker
                     .prune_images(Some(PruneImagesOptions {
-                        filters: Some(HashMap::from([(
-                            "dangling".to_string(),
-                            vec!["false".to_string()],
-                        )])),
+                        filters: Some(HashMap::from([
+                            ("dangling".to_string(), vec!["false".to_string()]),
+                            // Keep Harbor's builds: they're rollback targets.
+                            ("label!".to_string(), vec!["harbor.deployment".to_string()]),
+                        ])),
                     }))
                     .await?,
             )?,

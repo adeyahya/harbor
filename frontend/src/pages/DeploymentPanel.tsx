@@ -9,6 +9,7 @@ import { ContainerDetails } from '@/components/app/containers'
 import { LogViewer } from '@/components/app/LogViewer'
 import { GithubIcon } from '@/components/app/GithubIcon'
 import { EmptyState, ErrorAlert, Loading } from '@/components/app/page'
+import { PortsEditor } from '@/components/app/PortsEditor'
 import { AutoDeploySettings, SourceSettings, type SourceSettingsSet } from '@/components/app/SourceSettings'
 import { ChangesBar, ServicePanel, SettingsSection, usePanelTab, VariablesEditor } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
@@ -118,7 +119,9 @@ function DeploymentPanelInner({ name }: { name: string }) {
   const deployed = data.status !== 'not_deployed'
   const git = data.source === 'git'
   // Git deployments set their image from each build, so only image deployments can drift.
-  const drift = !git && data.container && data.container.Config.Image !== data.image
+  // A rollback runs an exact image ID (sha256:…), which is expected to differ from the tag.
+  const runningImage = data.container?.Config.Image ?? ''
+  const drift = !git && !!data.container && !runningImage.startsWith('sha256:') && runningImage !== data.image
   const dot = (fields: string[]) => (fields.some((f) => changed.includes(f)) ? ' •' : '')
 
   return (
@@ -226,13 +229,11 @@ function DeploymentPanelInner({ name }: { name: string }) {
         <div className="space-y-5">
           <SourceSettings key={data.updated_at} config={config} set={setSource} hasToken={data.has_token} token={token} onTokenChange={setToken} />
           {config.source === 'git' && <AutoDeploySettings name={data.name} config={config} set={setSource} secret={data.webhook_secret} />}
-          <SettingsSection title="Networking" description="Publish container ports on this host.">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Ports" hint={<>One per line: <code>host:container</code>, optional <code>/udp</code> or bind IP.</>}>
-                <Textarea value={config.ports} onChange={(e) => set('ports')(e.target.value)} rows={4} placeholder={'8080:80\n127.0.0.1:5432:5432'} className="font-mono text-[12.5px]" />
-              </Field>
+          <SettingsSection title="Networking" description="Publish container ports on this host. Taken ports are flagged as you type.">
+            <div className="space-y-4">
+              <PortsEditor value={config.ports} onChange={set('ports')} owner={`deployment:${data.name}`} image={data.image} />
               <Field label="Network" hint="Empty uses the default bridge network.">
-                <Input value={config.network} onChange={(e) => set('network')(e.target.value)} placeholder="bridge" className="font-mono" />
+                <Input value={config.network} onChange={(e) => set('network')(e.target.value)} placeholder="bridge" className="font-mono sm:w-72" />
               </Field>
             </div>
           </SettingsSection>

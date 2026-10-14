@@ -31,6 +31,15 @@ pub struct Update {
     pub started_at: String,
     pub finished_at: Option<String>,
     pub detail: String,
+    /// Image the operation ran (a built tag or image ID), if any.
+    pub artifact: String,
+    /// Settings snapshot for rollback; only its presence is sent to clients.
+    #[serde(rename = "has_snapshot", serialize_with = "is_set")]
+    pub snapshot: String,
+}
+
+fn is_set<S: serde::Serializer>(value: &str, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_bool(!value.is_empty())
 }
 
 /// Handle given to a running operation for appending to its log.
@@ -49,6 +58,16 @@ impl UpdateLog {
         let mut text = text.as_ref().trim_end().to_string();
         text.push('\n');
         let _ = self.tx.send(text);
+    }
+
+    /// Records what this operation deployed so it can be rolled back to.
+    pub async fn set_artifact(&self, artifact: &str, snapshot: &str) {
+        let _ = sqlx::query("UPDATE updates SET artifact = ?, snapshot = ? WHERE id = ?")
+            .bind(artifact)
+            .bind(snapshot)
+            .bind(self.id)
+            .execute(&self.db)
+            .await;
     }
 
     /// Short summary shown next to the operation, e.g. the commit being built.
@@ -193,7 +212,8 @@ pub fn router() -> Router<AppState> {
 async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> AppResult<Json<Vec<Update>>> {
     // The list omits logs to keep payloads small; fetch a single update for its log.
     let rows = sqlx::query_as::<_, Update>(
-        "SELECT id, operation, target_type, target_name, status, '' AS log, username, started_at, finished_at, detail
+        "SELECT id, operation, target_type, target_name, status, '' AS log, username, started_at, finished_at, detail,
+                artifact, snapshot
          FROM updates
          WHERE (?1 IS NULL OR target_type = ?1) AND (?2 IS NULL OR target_name = ?2)
          ORDER BY id DESC LIMIT ?3",

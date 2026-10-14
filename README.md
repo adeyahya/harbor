@@ -21,6 +21,14 @@ design, compiled into the backend binary.
     `harbor/<name>:<commit>`, and recreates the container. Optional root
     directory, Dockerfile path, build args, and an access token for private
     repos. With **auto-deploy** on, new commits are deployed automatically.
+
+  The port editor flags host ports already taken (by a container, Harbor, or
+  another process), suggests free ones, and offers the ports the image
+  `EXPOSE`s.
+- **Rollback**: every successful deploy records the exact image it ran (the
+  built `harbor/<name>:<commit>` tag, or the pulled image's ID) and the
+  settings it ran with. Rolling back reruns that image with those settings, with
+  no rebuild or pull. Stacks roll back their compose file and variables.
 - **Containers**: list, start/stop/restart/remove, live log streaming, inspect.
 - **Images, volumes, networks**: list, remove, prune.
 - **Activity**: every action is recorded with its status and full output, and
@@ -28,7 +36,7 @@ design, compiled into the backend binary.
 - **Auth**: the first visit creates an admin account. Sessions use an httpOnly cookie.
 
 Not yet implemented (Komodo has them): multiple servers, git-backed stacks,
-rollbacks, procedures/actions, GitOps resource sync, alerting.
+procedures/actions, GitOps resource sync, alerting.
 
 ## Requirements
 
@@ -87,8 +95,13 @@ Then open http://localhost:5173.
    `application/json`, the secret shown in Settings, and just the push event.
    Requests are verified with the `X-Hub-Signature-256` HMAC.
 
-Each build is kept as `harbor/<name>:<commit>`, which uses disk space over time;
-prune unused images from the Images page.
+Each build is kept as `harbor/<name>:<commit>` so it can be rolled back to.
+Builds are labelled `harbor.deployment` and **"Prune unused" on the Images page
+skips them**; remove old builds individually there when you need the space.
+Rolling back after the target image has been removed fails with a clear error
+and leaves the running container alone. A rollback doesn't change what
+auto-deploy considers "seen", so it won't immediately redeploy the newer
+commit, but the next push deploys as usual.
 
 Harbor controls your Docker engine, which is root-equivalent on the host. Only
 expose it on a trusted network or behind a TLS reverse proxy.
@@ -106,6 +119,7 @@ backend/
     deployments.rs single-container deployments, GitHub webhook, auto-deploy poller
     git.rs         clone, docker build, remote head lookup, webhook signatures
     process.rs     runs git/docker commands with output streamed to updates
+    ports.rs       host port availability and suggestions
     docker.rs      containers, logs (SSE), images, volumes, networks
     system.rs      host stats collector
     assets.rs      embedded frontend

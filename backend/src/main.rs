@@ -4,6 +4,7 @@ mod deployments;
 mod docker;
 mod error;
 mod git;
+mod ports;
 mod process;
 mod stacks;
 mod state;
@@ -67,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
         data_dir,
         host_stats,
         locks: Default::default(),
+        listen_port: addr.port(),
     };
 
     deployments::spawn_poller(state.clone());
@@ -76,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/docker", docker::router())
         .nest("/stacks", stacks::router())
         .nest("/deployments", deployments::router())
+        .nest("/ports", ports::router())
         .nest("/updates", updates::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_user));
 

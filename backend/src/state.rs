@@ -16,6 +16,8 @@ pub struct AppState {
     pub docker: Docker,
     pub data_dir: PathBuf,
     pub host_stats: Arc<RwLock<HostStats>>,
+    /// Harbor's own port, never suggested for port mappings.
+    pub listen_port: u16,
     /// One lock per resource so overlapping operations (e.g. two quick pushes)
     /// run one after another instead of racing.
     pub locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,

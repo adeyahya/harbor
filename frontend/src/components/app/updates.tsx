@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, ChevronDown, ChevronRight, Loader2, X, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, Loader2, Undo2, X, XCircle } from 'lucide-react'
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { api, type Update } from '@/api'
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { duration, timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { Confirm } from './confirm'
 import { EmptyState, Loading } from './page'
 import { StatusPill, UpdateStatus } from './status'
 
@@ -166,7 +168,8 @@ function UpdateDialog({ id, onClose }: { id: number | null; onClose: () => void 
 
 /** Deploy details look like "<sha7> <commit message>". */
 function splitDetail(detail: string) {
-  const [sha, ...rest] = detail.split(' ')
+  // Rollbacks describe the deploy they restored: "↩ <sha7> <message>".
+  const [sha, ...rest] = detail.replace(/^↩ /, '').split(' ')
   return /^[0-9a-f]{7,}$/.test(sha) ? { sha, message: rest.join(' ') } : { sha: '', message: detail }
 }
 
@@ -190,19 +193,23 @@ function ExpandedLog({ id }: { id: number }) {
  * Railway-style deployment history for one resource. The latest successful
  * deploy is marked ACTIVE; rows expand to show their logs.
  */
-export function DeploymentHistory({ targetType, targetName }: { targetType: string; targetName: string }) {
+export function DeploymentHistory({ targetType, targetName }: { targetType: 'stack' | 'deployment'; targetName: string }) {
   const { data, isLoading } = useUpdatesList(targetType, targetName)
   const [open, setOpen] = useState<number | null>(null)
+  const [rollbackTo, setRollbackTo] = useState<Update | null>(null)
+  const run = useRunAction()
   if (isLoading) return <Loading />
   if (!data?.length) return <EmptyState title="No deployments yet">Deploy this service and its history will show up here.</EmptyState>
   // The newest successful lifecycle change decides what's live: a deploy is
   // ACTIVE unless a later down/destroy removed it; older deploys are REMOVED.
-  const latest = data.find((u) => ['deploy', 'down', 'destroy'].includes(u.operation) && u.status === 'success')
-  const active = latest?.operation === 'deploy' ? latest.id : undefined
+  const isDeploy = (u: Update) => u.operation === 'deploy' || u.operation === 'rollback'
+  const latest = data.find((u) => (isDeploy(u) || ['down', 'destroy'].includes(u.operation)) && u.status === 'success')
+  const active = latest && isDeploy(latest) ? latest.id : undefined
+  const canRollback = (u: Update) => u.id !== active && u.status === 'success' && isDeploy(u) && u.has_snapshot
   return (
     <div className="space-y-2">
       {data.map((u) => (
-        <div key={u.id} className={cn('overflow-hidden rounded-xl border bg-card transition-colors', u.id === active && 'border-success/40')}>
+        <div key={u.id} className={cn('group/row overflow-hidden rounded-xl border bg-card transition-colors', u.id === active && 'border-success/40')}>
           <button className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-accent/40" onClick={() => setOpen(open === u.id ? null : u.id)}>
             <ChevronRight className={cn('size-4 shrink-0 text-muted-foreground transition-transform', open === u.id && 'rotate-90')} />
             <div className="min-w-0 flex-1">
@@ -220,7 +227,7 @@ export function DeploymentHistory({ targetType, targetName }: { targetType: stri
                 ) : u.status !== 'success' ? (
                   <StatusPill status={u.status} />
                 ) : (
-                  u.operation === 'deploy' && <StatusPill status="removed" label="Removed" />
+                  isDeploy(u) && <StatusPill status="removed" label="Removed" />
                 )}
               </div>
               <div className="mt-0.5 text-xs text-muted-foreground">
@@ -229,10 +236,50 @@ export function DeploymentHistory({ targetType, targetName }: { targetType: stri
               </div>
             </div>
             <UpdateStatus status={u.status} className="hidden sm:inline-flex" />
+            {canRollback(u) && (
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="opacity-100 transition-opacity sm:opacity-0 sm:group-hover/row:opacity-100 sm:focus-visible:opacity-100"
+              >
+                {/* A span, since buttons can't nest inside the row button. */}
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setRollbackTo(u)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setRollbackTo(u)
+                    }
+                  }}
+                >
+                  <Undo2 /> Rollback
+                </span>
+              </Button>
+            )}
           </button>
           {open === u.id && <ExpandedLog id={u.id} />}
         </div>
       ))}
+      <Confirm
+        open={rollbackTo !== null}
+        onOpenChange={(o) => !o && setRollbackTo(null)}
+        title="Roll back to this deploy?"
+        description={
+          targetType === 'stack'
+            ? 'The compose file and variables from this deploy are restored and the stack is redeployed with them.'
+            : `Runs this deploy's image again${rollbackTo?.detail ? ` (${rollbackTo.detail.replace(/^↩ /, '')})` : ''} and restores the ports, variables, volumes and other settings it ran with. Nothing is rebuilt or pulled.`
+        }
+        confirmLabel="Roll back"
+        destructive={false}
+        onConfirm={() => rollbackTo && run.mutate({ path: `/${targetType}s/${targetName}/rollback/${rollbackTo.id}` })}
+      />
     </div>
   )
 }

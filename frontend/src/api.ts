@@ -53,6 +53,10 @@ export interface Update {
   finished_at: string | null
   /** e.g. the commit a deploy built: "<sha7> <message>" */
   detail: string
+  /** Image the operation ran (built tag or image ID), if any. */
+  artifact: string
+  /** Whether the settings it ran with were recorded (needed for rollback). */
+  has_snapshot: boolean
 }
 
 export interface HostStats {
@@ -88,6 +92,19 @@ export interface Port {
   PrivatePort: number
   PublicPort?: number
   Type: string
+}
+
+export interface PortStatus {
+  port: number
+  protocol: string
+  available: boolean
+  /** Container name, "Harbor", or "another process". */
+  used_by: string | null
+}
+
+export interface PortsResponse {
+  checked: PortStatus[]
+  suggestions: number[]
 }
 
 export interface ContainerSummary {

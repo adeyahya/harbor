@@ -68,6 +68,37 @@ fn is_set<S: Serializer>(value: &str, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_bool(!value.is_empty())
 }
 
+/// The runtime settings a deploy ran with, stored on its update so a
+/// rollback restores them along with the image.
+#[derive(Serialize, Deserialize)]
+struct Snapshot {
+    image: String,
+    ports: String,
+    env: String,
+    volumes: String,
+    network: String,
+    restart: String,
+    command: String,
+}
+
+impl Snapshot {
+    fn of(d: &Deployment) -> Self {
+        Self {
+            image: d.image.clone(),
+            ports: d.ports.clone(),
+            env: d.env.clone(),
+            volumes: d.volumes.clone(),
+            network: d.network.clone(),
+            restart: d.restart.clone(),
+            command: d.command.clone(),
+        }
+    }
+
+    fn json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
 #[derive(Deserialize)]
 struct DeploymentInput {
     name: Option<String>,
@@ -139,6 +170,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list).post(create))
         .route("/{name}", get(detail).put(update).delete(remove))
+        .route("/{name}/rollback/{update_id}", post(rollback))
         .route("/{name}/{action}", post(action))
 }
 
@@ -363,6 +395,10 @@ async fn action(
 /// Starts an action on a deployment as a tracked update. Actions on the same
 /// deployment are serialized so overlapping deploys queue up.
 pub async fn run_action(state: &AppState, user: &User, d: Deployment, action: &str) -> AppResult<Update> {
+    run_op(state, user, d, action, None).await
+}
+
+async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, rollback_to: Option<Update>) -> AppResult<Update> {
     let op = action.to_string();
     let st = state.clone();
     updates::spawn(state, user, "deployment", &d.name.clone(), action, move |log| async move {
@@ -382,7 +418,8 @@ pub async fn run_action(state: &AppState, user: &User, d: Deployment, action: &s
         let docker = &st.docker;
         match op.as_str() {
             "deploy" if d.source == "git" => build_and_deploy(&st, &log, &d).await,
-            "deploy" => deploy(docker, &log, &d, &d.image, true).await,
+            "deploy" => deploy_image(docker, &log, &d).await,
+            "rollback" => roll_back(&st, &log, &d, rollback_to.expect("rollback target")).await,
             "pull" if d.source == "git" => anyhow::bail!("git deployments are built, not pulled; deploy to rebuild"),
             "pull" => pull(docker, &log, &d.image).await,
             "start" => Ok(docker.start_container(&d.name, None::<StartContainerOptions>).await?),
@@ -413,7 +450,10 @@ async fn build_and_deploy(state: &AppState, log: &UpdateLog, d: &Deployment) -> 
     let repo = format!("harbor/{}", d.name);
     let tag = format!("{repo}:{}", &commit.sha[..commit.sha.len().min(12)]);
     let build_args: Vec<String> = lines(&d.build_args).map(str::to_string).collect();
-    let built = git::build(log, &checkout, &d.build_context, &d.dockerfile, &build_args, &[tag.clone(), format!("{repo}:latest")]).await;
+    // The label keeps builds out of "prune unused images" so they stay
+    // available for rollback.
+    let labels = [format!("{LABEL}={}", d.name)];
+    let built = git::build(log, &checkout, &d.build_context, &d.dockerfile, &build_args, &[tag.clone(), format!("{repo}:latest")], &labels).await;
     // The checkout is only needed for the build.
     tokio::fs::remove_dir_all(&checkout).await.ok();
     built?;
@@ -426,7 +466,103 @@ async fn build_and_deploy(state: &AppState, log: &UpdateLog, d: &Deployment) -> 
         .bind(d.id)
         .execute(&state.db)
         .await?;
+    let snapshot = Snapshot { image: tag.clone(), ..Snapshot::of(d) };
+    log.set_artifact(&tag, &snapshot.json()).await;
     Ok(())
+}
+
+/// Pulls and deploys a registry image, recording the exact image ID so a
+/// rollback isn't affected by the tag moving later.
+async fn deploy_image(docker: &Docker, log: &UpdateLog, d: &Deployment) -> anyhow::Result<()> {
+    deploy(docker, log, d, &d.image, true).await?;
+    let id = docker.inspect_image(&d.image).await.ok().and_then(|i| i.id).unwrap_or_default();
+    log.set_artifact(&id, &Snapshot::of(d).json()).await;
+    Ok(())
+}
+
+/// Checks that `update` is a successful deploy of this deployment whose
+/// image still exists, returning a user-facing error otherwise.
+async fn rollback_target(state: &AppState, d: &Deployment, update_id: i64) -> AppResult<Update> {
+    let u = sqlx::query_as::<_, Update>("SELECT * FROM updates WHERE id = ?")
+        .bind(update_id)
+        .fetch_optional(&state.db)
+        .await?
+        .filter(|u| u.target_type == "deployment" && u.target_name == d.name)
+        .ok_or_else(|| AppError::not_found("deploy not found for this deployment"))?;
+    if u.status != "success" || !matches!(u.operation.as_str(), "deploy" | "rollback") || u.snapshot.is_empty() || u.artifact.is_empty() {
+        return Err(AppError::bad_request("only successful deploys made by this version of Harbor can be rolled back to"));
+    }
+    if state.docker.inspect_image(&u.artifact).await.is_err() {
+        return Err(AppError::conflict(
+            "the image for that deploy no longer exists (it was probably pruned); redeploy instead",
+        ));
+    }
+    Ok(u)
+}
+
+async fn rollback(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Path((name, update_id)): Path<(String, i64)>,
+) -> AppResult<Json<Update>> {
+    let d = fetch(&state, &name).await?;
+    let target = rollback_target(&state, &d, update_id).await?;
+    Ok(Json(run_op(&state, &user, d, "rollback", Some(target)).await?))
+}
+
+/// Restores a previous deploy's settings and runs its exact image again,
+/// without building or pulling.
+async fn roll_back(state: &AppState, log: &UpdateLog, d: &Deployment, target: Update) -> anyhow::Result<()> {
+    // Re-check under the lock: the image may have been pruned meanwhile.
+    if state.docker.inspect_image(&target.artifact).await.is_err() {
+        anyhow::bail!("the image for that deploy no longer exists; redeploy instead");
+    }
+    let snapshot: Snapshot = serde_json::from_str(&target.snapshot)?;
+    // Rolling back to a rollback: describe the deploy it restored.
+    let detail = target.detail.trim_start_matches("↩ ");
+    let label = if detail.is_empty() {
+        format!("{} ({})", snapshot.image, short_image(&target.artifact))
+    } else {
+        detail.to_string()
+    };
+    log.line(format!("rolling back to deploy #{}: {label}", target.id)).await;
+    log.set_detail(&format!("↩ {label}")).await;
+
+    // Restore the settings first so the panel shows what's actually running.
+    // For git deployments the commit moves back too, but `last_seen_commit`
+    // stays put so the poller doesn't immediately redeploy the newer head.
+    let (commit, message) = detail.split_once(' ').unwrap_or((detail, ""));
+    sqlx::query(
+        "UPDATE deployments SET image = ?, ports = ?, env = ?, volumes = ?, network = ?, restart = ?, command = ?, updated_at = ?,
+           last_commit = CASE WHEN source = 'git' THEN ? ELSE last_commit END,
+           last_commit_message = CASE WHEN source = 'git' THEN ? ELSE last_commit_message END
+         WHERE id = ?",
+    )
+    .bind(&snapshot.image)
+    .bind(&snapshot.ports)
+    .bind(&snapshot.env)
+    .bind(&snapshot.volumes)
+    .bind(&snapshot.network)
+    .bind(&snapshot.restart)
+    .bind(&snapshot.command)
+    .bind(now())
+    .bind(commit)
+    .bind(message)
+    .bind(d.id)
+    .execute(&state.db)
+    .await?;
+    let restored = sqlx::query_as::<_, Deployment>("SELECT * FROM deployments WHERE id = ?")
+        .bind(d.id)
+        .fetch_one(&state.db)
+        .await?;
+    deploy(&state.docker, log, &restored, &target.artifact, false).await?;
+    // Recorded like a deploy, so you can roll forward again.
+    log.set_artifact(&target.artifact, &target.snapshot).await;
+    Ok(())
+}
+
+fn short_image(image: &str) -> String {
+    image.strip_prefix("sha256:").map(|id| id[..12.min(id.len())].to_string()).unwrap_or_else(|| image.to_string())
 }
 
 /// The image API pulls *every* tag when none is given, unlike the CLI which

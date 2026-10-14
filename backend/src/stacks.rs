@@ -69,7 +69,15 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list).post(create))
         .route("/{name}", get(detail).put(update).delete(remove))
+        .route("/{name}/rollback/{update_id}", post(rollback))
         .route("/{name}/{action}", post(action))
+}
+
+/// The files a stack deploy ran with, stored on its update for rollback.
+#[derive(Serialize, Deserialize)]
+struct Snapshot {
+    compose: String,
+    env: String,
 }
 
 fn project_label(name: &str) -> String {
@@ -218,9 +226,75 @@ async fn action(
         return Err(AppError::bad_request("stack has no compose file"));
     }
     let dir = state.stacks_dir().join(&name);
+    let st = state.clone();
+    let deploying = action == "deploy";
     let update = updates::spawn(&state, &user, "stack", &name, &action, move |log| async move {
+        let _guard = lock(&st, &stack.name, &log).await;
+        // Re-read so a queued operation uses the latest saved files.
+        let stack = fetch(&st, &stack.name).await.map_err(|e| anyhow::anyhow!(e.message))?;
         write_files(&dir, &stack).await?;
-        compose(&log, &dir, &stack.name, &args).await
+        compose(&log, &dir, &stack.name, &args).await?;
+        if deploying {
+            let snapshot = Snapshot { compose: stack.compose.clone(), env: stack.env.clone() };
+            log.set_artifact("", &serde_json::to_string(&snapshot)?).await;
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(Json(update))
+}
+
+/// Serializes operations on one stack so overlapping deploys queue up.
+async fn lock(state: &AppState, name: &str, log: &UpdateLog) -> tokio::sync::OwnedMutexGuard<()> {
+    let lock = state.lock_for(&format!("stack:{name}"));
+    match lock.clone().try_lock_owned() {
+        Ok(g) => g,
+        Err(_) => {
+            log.line("waiting for the previous operation on this stack to finish…").await;
+            lock.lock_owned().await
+        }
+    }
+}
+
+/// Restores the compose file and variables from a previous deploy and runs
+/// `docker compose up` with them.
+async fn rollback(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Path((name, update_id)): Path<(String, i64)>,
+) -> AppResult<Json<Update>> {
+    let stack = fetch(&state, &name).await?;
+    let target = sqlx::query_as::<_, Update>("SELECT * FROM updates WHERE id = ?")
+        .bind(update_id)
+        .fetch_optional(&state.db)
+        .await?
+        .filter(|u| u.target_type == "stack" && u.target_name == stack.name)
+        .ok_or_else(|| AppError::not_found("deploy not found for this stack"))?;
+    if target.status != "success" || !matches!(target.operation.as_str(), "deploy" | "rollback") || target.snapshot.is_empty() {
+        return Err(AppError::bad_request("only successful deploys made by this version of Harbor can be rolled back to"));
+    }
+    let snapshot: Snapshot = serde_json::from_str(&target.snapshot).map_err(|e| anyhow::anyhow!(e))?;
+    let dir = state.stacks_dir().join(&name);
+    let st = state.clone();
+    let update = updates::spawn(&state, &user, "stack", &name, "rollback", move |log| async move {
+        let _guard = lock(&st, &stack.name, &log).await;
+        let when = target.started_at.get(..16).unwrap_or(&target.started_at).replace('T', " ");
+        log.line(format!("restoring compose file and variables from deploy #{} ({when} UTC)", target.id)).await;
+        log.set_detail(&format!("↩ deploy #{} from {when} UTC", target.id)).await;
+        let restored = sqlx::query_as::<_, Stack>(
+            "UPDATE stacks SET compose = ?, env = ?, updated_at = ? WHERE id = ? RETURNING *",
+        )
+        .bind(&snapshot.compose)
+        .bind(&snapshot.env)
+        .bind(now())
+        .bind(stack.id)
+        .fetch_one(&st.db)
+        .await?;
+        write_files(&dir, &restored).await?;
+        let args: Vec<String> = ["up", "-d", "--remove-orphans"].iter().map(|s| s.to_string()).collect();
+        compose(&log, &dir, &restored.name, &args).await?;
+        log.set_artifact("", &target.snapshot).await;
+        Ok(())
     })
     .await?;
     Ok(Json(update))

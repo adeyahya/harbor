@@ -3,6 +3,8 @@ mod auth;
 mod deployments;
 mod docker;
 mod error;
+mod git;
+mod process;
 mod stacks;
 mod state;
 mod system;
@@ -57,13 +59,17 @@ async fn main() -> anyhow::Result<()> {
 
     let host_stats = Arc::new(RwLock::new(Default::default()));
     system::spawn_collector(host_stats.clone());
+    std::fs::create_dir_all(data_dir.join("builds"))?;
 
     let state = AppState {
         db,
         docker,
         data_dir,
         host_stats,
+        locks: Default::default(),
     };
+
+    deployments::spawn_poller(state.clone());
 
     let protected = Router::new()
         .nest("/system", system::router())
@@ -76,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
     let api = Router::new()
         .route("/health", get(|| async { "ok" }))
         .nest("/auth", auth::router())
+        .nest("/webhooks", deployments::webhook_router())
         .merge(protected)
         .fallback(|| async { error::AppError::not_found("no such endpoint") });
 

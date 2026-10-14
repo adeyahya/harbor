@@ -51,6 +51,8 @@ export interface Update {
   username: string
   started_at: string
   finished_at: string | null
+  /** e.g. the commit a deploy built: "<sha7> <message>" */
+  detail: string
 }
 
 export interface HostStats {
@@ -162,9 +164,12 @@ export interface StackDetail extends Stack {
   containers: ContainerSummary[]
 }
 
+export type DeploymentSource = 'image' | 'git'
+
 export interface Deployment {
   id: number
   name: string
+  /** For git deployments, the most recently built image tag. */
   image: string
   ports: string
   env: string
@@ -174,6 +179,24 @@ export interface Deployment {
   command: string
   created_at: string
   updated_at: string
+  source: DeploymentSource
+  git_url: string
+  git_branch: string
+  build_context: string
+  dockerfile: string
+  build_args: string
+  /** The token itself is never returned. */
+  has_token: boolean
+  auto_deploy: boolean
+  webhook_secret: string
+  last_commit: string
+  last_commit_message: string
+}
+
+/** `owner/repo` for GitHub URLs, otherwise the URL itself. */
+export function repoLabel(url: string): string {
+  const s = url.replace(/\/$/, '').replace(/\.git$/, '')
+  return s.replace(/^https:\/\/github\.com\//, '').replace(/^git@github\.com:/, '')
 }
 
 export interface DeploymentListItem extends Deployment {

@@ -2,7 +2,7 @@
 //! stored in the database. Deploying writes them to `<data>/stacks/<name>/`
 //! and shells out to `docker compose`.
 
-use std::{path::PathBuf, process::Stdio};
+use std::path::PathBuf;
 
 use anyhow::Context;
 use axum::{
@@ -12,10 +12,7 @@ use axum::{
 };
 use bollard::models::{ContainerSummary, ContainerSummaryStateEnum};
 use serde::{Deserialize, Serialize};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, BufReader},
-    process::Command,
-};
+use tokio::process::Command;
 
 use crate::{
     auth::User,
@@ -247,25 +244,6 @@ async fn compose(log: &UpdateLog, dir: &PathBuf, project: &str, args: &[String])
         .args(args)
         .current_dir(dir)
         .env("COMPOSE_ANSI", "never")
-        .env("COMPOSE_PROGRESS", "plain")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    log.line(format!("$ docker compose -p {project} {}", args.join(" "))).await;
-
-    let mut child = cmd.spawn().context("failed to run `docker compose`; is Docker installed?")?;
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-    tokio::join!(pump(stdout, log), pump(stderr, log));
-    let status = child.wait().await?;
-    if !status.success() {
-        anyhow::bail!("docker compose exited with {status}");
-    }
-    Ok(())
-}
-
-async fn pump(reader: impl AsyncRead + Unpin, log: &UpdateLog) {
-    let mut lines = BufReader::new(reader).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        log.line(line).await;
-    }
+        .env("COMPOSE_PROGRESS", "plain");
+    crate::process::run(log, cmd, &format!("docker compose -p {project} {}", args.join(" "))).await
 }

@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownToLine, Box, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
+import { ArrowDownToLine, Box, GitBranch, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { api, type Deployment, type DeploymentDetail } from '@/api'
+import { api, repoLabel, type Deployment, type DeploymentDetail } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { ContainerDetails } from '@/components/app/containers'
 import { LogViewer } from '@/components/app/LogViewer'
+import { GithubIcon } from '@/components/app/GithubIcon'
 import { EmptyState, ErrorAlert, Loading } from '@/components/app/page'
+import { AutoDeploySettings, SourceSettings, type SourceSettingsSet } from '@/components/app/SourceSettings'
 import { ChangesBar, ServicePanel, SettingsSection, usePanelTab, VariablesEditor } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
 import { DeploymentHistory, useRunAction } from '@/components/app/updates'
@@ -21,8 +23,24 @@ import { timeAgo } from '@/lib/format'
 
 const TABS = ['deployments', 'logs', 'variables', 'settings', 'container'] as const
 
-type Config = Pick<Deployment, 'image' | 'ports' | 'env' | 'volumes' | 'network' | 'restart' | 'command'>
-const FIELDS: (keyof Config)[] = ['image', 'ports', 'env', 'volumes', 'network', 'restart', 'command']
+const FIELDS = [
+  'image',
+  'ports',
+  'env',
+  'volumes',
+  'network',
+  'restart',
+  'command',
+  'source',
+  'git_url',
+  'git_branch',
+  'build_context',
+  'dockerfile',
+  'build_args',
+  'auto_deploy',
+] as const satisfies readonly (keyof Deployment)[]
+type Config = Pick<Deployment, (typeof FIELDS)[number]>
+const SETTINGS_FIELDS: (keyof Config)[] = FIELDS.filter((f) => f !== 'env')
 
 export function DeploymentPanel() {
   const { name = '' } = useParams()
@@ -50,17 +68,25 @@ function DeploymentPanelInner({ name }: { name: string }) {
     refetchInterval: 4000,
   })
   const [draft, setDraft] = useState<Partial<Config>>({})
+  // null = unchanged, '' = remove, otherwise the replacement token.
+  const [token, setToken] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<'destroy' | 'delete' | null>(null)
 
   const config: Config | null = data ? { ...pick(data), ...draft } : null
-  const changed = data ? FIELDS.filter((f) => draft[f] !== undefined && draft[f] !== data[f]) : []
-  const set = (k: keyof Config) => (v: string) => setDraft((d) => ({ ...d, [k]: v }))
+  const changed: string[] = data ? FIELDS.filter((f) => draft[f] !== undefined && draft[f] !== data[f]) : []
+  if (token !== null) changed.push('git_token')
+  const set =
+    <K extends keyof Config>(k: K) =>
+    (v: Config[K]) =>
+      setDraft((d) => ({ ...d, [k]: v }))
+  const setSource: SourceSettingsSet = (k) => (v) => setDraft((d) => ({ ...d, [k]: v }))
 
   const save = useMutation({
-    mutationFn: () => api.put<Deployment>(`/deployments/${name}`, config),
+    mutationFn: () => api.put<Deployment>(`/deployments/${name}`, { ...config, git_token: token ?? undefined }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['deployment', name] })
       setDraft({})
+      setToken(null)
       toast.success('Changes saved')
     },
     onError: (e) => toast.error(e.message),
@@ -90,17 +116,28 @@ function DeploymentPanelInner({ name }: { name: string }) {
   if (!data || !config) return shell(<ErrorAlert error={error ?? 'Deployment not found'} />)
 
   const deployed = data.status !== 'not_deployed'
-  const drift = data.container && data.container.Config.Image !== data.image
-  const dot = (fields: (keyof Config)[]) => (fields.some((f) => changed.includes(f)) ? ' •' : '')
+  const git = data.source === 'git'
+  // Git deployments set their image from each build, so only image deployments can drift.
+  const drift = !git && data.container && data.container.Config.Image !== data.image
+  const dot = (fields: string[]) => (fields.some((f) => changed.includes(f)) ? ' •' : '')
 
   return (
     <ServicePanel
-      icon={<Box />}
+      icon={git ? <GithubIcon /> : <Box />}
       title={data.name}
       subtitle={
         <>
           <Status status={data.status} />
-          <span className="font-mono text-xs">{data.image}</span>
+          {git ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-xs">
+              <span className="truncate font-medium text-foreground/90">{repoLabel(data.git_url)}</span>
+              <GitBranch className="size-3 shrink-0" />
+              <span className="font-mono">{data.git_branch}</span>
+              {data.last_commit && <span className="font-mono text-brand">{data.last_commit.slice(0, 7)}</span>}
+            </span>
+          ) : (
+            <span className="font-mono text-xs">{data.image}</span>
+          )}
           <span>Updated {timeAgo(data.updated_at)}</span>
         </>
       }
@@ -108,7 +145,7 @@ function DeploymentPanelInner({ name }: { name: string }) {
         { id: 'deployments', label: 'Deployments' },
         { id: 'logs', label: 'Logs' },
         { id: 'variables', label: `Variables${dot(['env'])}` },
-        { id: 'settings', label: `Settings${dot(['image', 'ports', 'volumes', 'network', 'restart', 'command'])}` },
+        { id: 'settings', label: `Settings${dot([...SETTINGS_FIELDS, 'git_token'])}` },
         { id: 'container', label: 'Container' },
       ]}
       tab={tab}
@@ -125,9 +162,11 @@ function DeploymentPanelInner({ name }: { name: string }) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onSelect={() => action('pull')}>
-                <ArrowDownToLine /> Pull image
-              </DropdownMenuItem>
+              {!git && (
+                <DropdownMenuItem onSelect={() => action('pull')}>
+                  <ArrowDownToLine /> Pull image
+                </DropdownMenuItem>
+              )}
               {deployed && (
                 <>
                   {data.status === 'running' ? (
@@ -185,9 +224,8 @@ function DeploymentPanelInner({ name }: { name: string }) {
 
       {tab === 'settings' && (
         <div className="space-y-5">
-          <SettingsSection title="Source" description="The image to run. Untagged images use :latest.">
-            <Input value={config.image} onChange={(e) => set('image')(e.target.value)} placeholder="nginx:alpine" className="font-mono" />
-          </SettingsSection>
+          <SourceSettings key={data.updated_at} config={config} set={setSource} hasToken={data.has_token} token={token} onTokenChange={setToken} />
+          {config.source === 'git' && <AutoDeploySettings name={data.name} config={config} set={setSource} secret={data.webhook_secret} />}
           <SettingsSection title="Networking" description="Publish container ports on this host.">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Ports" hint={<>One per line: <code>host:container</code>, optional <code>/udp</code> or bind IP.</>}>
@@ -268,5 +306,5 @@ function DeploymentPanelInner({ name }: { name: string }) {
 }
 
 function pick(d: Deployment): Config {
-  return { image: d.image, ports: d.ports, env: d.env, volumes: d.volumes, network: d.network, restart: d.restart, command: d.command }
+  return Object.fromEntries(FIELDS.map((f) => [f, d[f]])) as Config
 }

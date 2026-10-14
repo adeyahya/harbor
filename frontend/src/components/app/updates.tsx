@@ -164,6 +164,12 @@ function UpdateDialog({ id, onClose }: { id: number | null; onClose: () => void 
   )
 }
 
+/** Deploy details look like "<sha7> <commit message>". */
+function splitDetail(detail: string) {
+  const [sha, ...rest] = detail.split(' ')
+  return /^[0-9a-f]{7,}$/.test(sha) ? { sha, message: rest.join(' ') } : { sha: '', message: detail }
+}
+
 function useUpdatesList(targetType?: string, targetName?: string, limit = 50) {
   const params = new URLSearchParams({ limit: String(limit) })
   if (targetType) params.set('target_type', targetType)
@@ -200,8 +206,15 @@ export function DeploymentHistory({ targetType, targetName }: { targetType: stri
           <button className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-accent/40" onClick={() => setOpen(open === u.id ? null : u.id)}>
             <ChevronRight className={cn('size-4 shrink-0 text-muted-foreground transition-transform', open === u.id && 'rotate-90')} />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium capitalize">{u.operation}</span>
+              <div className="flex min-w-0 items-center gap-2">
+                {u.detail ? (
+                  <>
+                    <span className="truncate text-sm font-medium">{splitDetail(u.detail).message || u.operation}</span>
+                    <span className="shrink-0 font-mono text-xs text-brand">{splitDetail(u.detail).sha}</span>
+                  </>
+                ) : (
+                  <span className="text-sm font-medium capitalize">{u.operation}</span>
+                )}
                 {u.id === active ? (
                   <StatusPill status="success" label="Active" />
                 ) : u.status !== 'success' ? (
@@ -211,6 +224,7 @@ export function DeploymentHistory({ targetType, targetName }: { targetType: stri
                 )}
               </div>
               <div className="mt-0.5 text-xs text-muted-foreground">
+                {u.detail && <span className="capitalize">{u.operation} · </span>}
                 {timeAgo(u.started_at)} by {u.username} · {duration(u.started_at, u.finished_at)}
               </div>
             </div>
@@ -237,6 +251,7 @@ export function ActivityFeed({ limit = 100, compact = false }: { limit?: number;
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm">
               <span className="font-medium capitalize">{u.operation}</span> <span className="text-muted-foreground">{u.target_type}</span> <span className="font-medium">{u.target_name}</span>
+              {u.detail && <span className="ml-2 font-mono text-xs text-brand">{splitDetail(u.detail).sha}</span>}
             </div>
             {!compact && <div className="text-xs text-muted-foreground">by {u.username}</div>}
           </div>

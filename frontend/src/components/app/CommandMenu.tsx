@@ -75,11 +75,14 @@ export function CommandMenuProvider({ children }: { children: ReactNode }) {
             </CommandGroup>
           ) : null}
           <CommandGroup heading="Create">
-            <CommandItem onSelect={() => run(() => create('stack'))}>
-              <Plus /> New stack
+            <CommandItem onSelect={() => run(() => create('repo'))}>
+              <Plus /> Deploy from GitHub repo
             </CommandItem>
-            <CommandItem onSelect={() => run(() => create('deployment'))}>
-              <Plus /> New deployment
+            <CommandItem onSelect={() => run(() => create('image'))}>
+              <Plus /> Deploy a Docker image
+            </CommandItem>
+            <CommandItem onSelect={() => run(() => create('stack'))}>
+              <Plus /> New compose stack
             </CommandItem>
           </CommandGroup>
           <CommandSeparator />

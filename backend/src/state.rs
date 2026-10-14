@@ -1,4 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use bollard::Docker;
 use sqlx::SqlitePool;
@@ -12,11 +16,27 @@ pub struct AppState {
     pub docker: Docker,
     pub data_dir: PathBuf,
     pub host_stats: Arc<RwLock<HostStats>>,
+    /// One lock per resource so overlapping operations (e.g. two quick pushes)
+    /// run one after another instead of racing.
+    pub locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 impl AppState {
     pub fn stacks_dir(&self) -> PathBuf {
         self.data_dir.join("stacks")
+    }
+
+    pub fn builds_dir(&self) -> PathBuf {
+        self.data_dir.join("builds")
+    }
+
+    pub fn lock_for(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.locks
+            .lock()
+            .expect("locks poisoned")
+            .entry(key.to_string())
+            .or_default()
+            .clone()
     }
 }
 

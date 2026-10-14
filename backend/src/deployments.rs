@@ -1,12 +1,14 @@
-//! Deployments are single containers defined by an image and a small set of
-//! options. Deploying pulls the image and (re)creates a container named after
-//! the deployment.
+//! Deployments are single containers. Their image either comes from a
+//! registry (pulled on deploy) or is built from a git repository's
+//! Dockerfile. Deploying (re)creates a container named after the deployment.
 
 use std::collections::HashMap;
 
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    body::Bytes,
+    extract::{DefaultBodyLimit, Path, State},
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
 use bollard::{
@@ -18,11 +20,13 @@ use bollard::{
     query_parameters::*,
 };
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::{Value, json};
 
 use crate::{
     auth::User,
     error::{AppError, AppResult},
+    git,
     state::{AppState, now, validate_name},
     updates::{self, Update, UpdateLog},
 };
@@ -33,6 +37,7 @@ const LABEL: &str = "harbor.deployment";
 pub struct Deployment {
     pub id: i64,
     pub name: String,
+    /// For git deployments, the most recently built image tag.
     pub image: String,
     pub ports: String,
     pub env: String,
@@ -42,11 +47,33 @@ pub struct Deployment {
     pub command: String,
     pub created_at: String,
     pub updated_at: String,
+    /// "image" or "git".
+    pub source: String,
+    pub git_url: String,
+    pub git_branch: String,
+    pub build_context: String,
+    pub dockerfile: String,
+    pub build_args: String,
+    /// Never sent to clients; serialized only as whether one is set.
+    #[serde(rename = "has_token", serialize_with = "is_set")]
+    pub git_token: String,
+    pub auto_deploy: bool,
+    pub webhook_secret: String,
+    pub last_commit: String,
+    pub last_commit_message: String,
+    pub last_seen_commit: String,
+}
+
+fn is_set<S: Serializer>(value: &str, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_bool(!value.is_empty())
 }
 
 #[derive(Deserialize)]
 struct DeploymentInput {
     name: Option<String>,
+    #[serde(default = "default_source")]
+    source: String,
+    #[serde(default)]
     image: String,
     #[serde(default)]
     ports: String,
@@ -60,10 +87,34 @@ struct DeploymentInput {
     restart: String,
     #[serde(default)]
     command: String,
+    #[serde(default)]
+    git_url: String,
+    /// Empty means the repository's default branch.
+    #[serde(default)]
+    git_branch: String,
+    #[serde(default = "default_context")]
+    build_context: String,
+    #[serde(default = "default_dockerfile")]
+    dockerfile: String,
+    #[serde(default)]
+    build_args: String,
+    /// Absent keeps the stored token, "" clears it, anything else replaces it.
+    git_token: Option<String>,
+    #[serde(default)]
+    auto_deploy: bool,
 }
 
+fn default_source() -> String {
+    "image".into()
+}
 fn default_restart() -> String {
     "unless-stopped".into()
+}
+fn default_context() -> String {
+    ".".into()
+}
+fn default_dockerfile() -> String {
+    "Dockerfile".into()
 }
 
 #[derive(Serialize)]
@@ -89,6 +140,14 @@ pub fn router() -> Router<AppState> {
         .route("/", get(list).post(create))
         .route("/{name}", get(detail).put(update).delete(remove))
         .route("/{name}/{action}", post(action))
+}
+
+/// Unauthenticated routes; requests are verified by signature instead.
+pub fn webhook_router() -> Router<AppState> {
+    Router::new()
+        .route("/github/{name}", post(github_webhook))
+        // GitHub sends push payloads up to 25 MB.
+        .layer(DefaultBodyLimit::max(25 * 1024 * 1024))
 }
 
 async fn fetch(state: &AppState, name: &str) -> AppResult<Deployment> {
@@ -155,23 +214,57 @@ async fn detail(State(state): State<AppState>, Path(name): Path<String>) -> AppR
     }))
 }
 
-fn validate(input: &DeploymentInput) -> AppResult<()> {
-    if input.image.trim().is_empty() {
-        return Err(AppError::bad_request("image is required"));
+/// Fills in the default branch when a git deployment doesn't name one.
+async fn resolve_branch(input: &mut DeploymentInput, stored_token: &str) -> AppResult<()> {
+    if input.source != "git" || !input.git_branch.trim().is_empty() {
+        return Ok(());
+    }
+    let url = git::normalize_url(&input.git_url);
+    let token = input.git_token.as_deref().unwrap_or(stored_token);
+    let branch = tokio::time::timeout(std::time::Duration::from_secs(20), git::default_branch(&url, token))
+        .await
+        .map_err(|_| AppError::bad_request("timed out contacting the repository"))?
+        .map_err(|e| AppError::bad_request(format!("couldn't reach the repository: {e:#}")))?;
+    input.git_branch = branch;
+    Ok(())
+}
+
+fn validate(input: &mut DeploymentInput) -> AppResult<()> {
+    match input.source.as_str() {
+        "image" => {
+            if input.image.trim().is_empty() {
+                return Err(AppError::bad_request("image is required"));
+            }
+        }
+        "git" => {
+            input.git_url = git::normalize_url(&input.git_url);
+            input.git_branch = input.git_branch.trim().to_string();
+            if input.git_url.is_empty() || input.git_url.starts_with('-') {
+                return Err(AppError::bad_request("repository URL is required"));
+            }
+            if input.git_branch.is_empty() || input.git_branch.starts_with('-') || input.git_branch.contains(char::is_whitespace) {
+                return Err(AppError::bad_request("invalid branch name"));
+            }
+            git::validate_rel_path(&input.build_context, "root directory").map_err(AppError::bad_request)?;
+            git::validate_rel_path(&input.dockerfile, "Dockerfile path").map_err(AppError::bad_request)?;
+        }
+        other => return Err(AppError::bad_request(format!("unknown source '{other}'"))),
     }
     parse_restart(&input.restart)?;
     parse_ports(&input.ports)?;
     Ok(())
 }
 
-async fn create(State(state): State<AppState>, Json(input): Json<DeploymentInput>) -> AppResult<Json<Deployment>> {
+async fn create(State(state): State<AppState>, Json(mut input): Json<DeploymentInput>) -> AppResult<Json<Deployment>> {
     let name = input.name.clone().unwrap_or_default();
     validate_name(&name)?;
-    validate(&input)?;
+    resolve_branch(&mut input, "").await?;
+    validate(&mut input)?;
     let ts = now();
     let d = sqlx::query_as::<_, Deployment>(
-        "INSERT INTO deployments (name, image, ports, env, volumes, network, restart, command, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+        "INSERT INTO deployments (name, image, ports, env, volumes, network, restart, command, created_at, updated_at,
+           source, git_url, git_branch, build_context, dockerfile, build_args, git_token, auto_deploy, webhook_secret)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .bind(&name)
     .bind(input.image.trim())
@@ -183,6 +276,15 @@ async fn create(State(state): State<AppState>, Json(input): Json<DeploymentInput
     .bind(&input.command)
     .bind(&ts)
     .bind(&ts)
+    .bind(&input.source)
+    .bind(&input.git_url)
+    .bind(&input.git_branch)
+    .bind(input.build_context.trim())
+    .bind(input.dockerfile.trim())
+    .bind(&input.build_args)
+    .bind(input.git_token.as_deref().unwrap_or("").trim())
+    .bind(input.auto_deploy)
+    .bind(hex::encode(rand::random::<[u8; 20]>()))
     .fetch_one(&state.db)
     .await?;
     Ok(Json(d))
@@ -191,13 +293,21 @@ async fn create(State(state): State<AppState>, Json(input): Json<DeploymentInput
 async fn update(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    Json(input): Json<DeploymentInput>,
+    Json(mut input): Json<DeploymentInput>,
 ) -> AppResult<Json<Deployment>> {
-    validate(&input)?;
+    let existing = fetch(&state, &name).await?;
+    resolve_branch(&mut input, &existing.git_token).await?;
+    validate(&mut input)?;
     let d = sqlx::query_as::<_, Deployment>(
-        "UPDATE deployments SET image = ?, ports = ?, env = ?, volumes = ?, network = ?, restart = ?, command = ?, updated_at = ?
-         WHERE name = ? RETURNING *",
+        // A git deployment's image is set by its builds, not by the client.
+        "UPDATE deployments SET
+           image = CASE WHEN ?1 = 'git' THEN image ELSE ?2 END,
+           ports = ?3, env = ?4, volumes = ?5, network = ?6, restart = ?7, command = ?8, updated_at = ?9,
+           source = ?1, git_url = ?10, git_branch = ?11, build_context = ?12, dockerfile = ?13, build_args = ?14,
+           git_token = COALESCE(?15, git_token), auto_deploy = ?16
+         WHERE name = ?17 RETURNING *",
     )
+    .bind(&input.source)
     .bind(input.image.trim())
     .bind(&input.ports)
     .bind(&input.env)
@@ -206,6 +316,13 @@ async fn update(
     .bind(&input.restart)
     .bind(&input.command)
     .bind(now())
+    .bind(&input.git_url)
+    .bind(&input.git_branch)
+    .bind(input.build_context.trim())
+    .bind(input.dockerfile.trim())
+    .bind(&input.build_args)
+    .bind(input.git_token.as_deref().map(str::trim))
+    .bind(input.auto_deploy)
     .bind(&name)
     .fetch_optional(&state.db)
     .await?
@@ -224,6 +341,10 @@ async fn remove(State(state): State<AppState>, Path(name): Path<String>) -> AppR
         .bind(d.id)
         .execute(&state.db)
         .await?;
+    let checkout = state.builds_dir().join(&name);
+    if checkout.exists() {
+        tokio::fs::remove_dir_all(checkout).await.ok();
+    }
     Ok(Json(d))
 }
 
@@ -232,27 +353,80 @@ async fn action(
     Extension(user): Extension<User>,
     Path((name, action)): Path<(String, String)>,
 ) -> AppResult<Json<Update>> {
-    let d = fetch(&state, &name).await?;
-    let docker = state.docker.clone();
-    let op = action.clone();
-    if !matches!(op.as_str(), "deploy" | "pull" | "start" | "stop" | "restart" | "destroy") {
+    if !matches!(action.as_str(), "deploy" | "pull" | "start" | "stop" | "restart" | "destroy") {
         return Err(AppError::bad_request(format!("unknown action '{action}'")));
     }
-    let update = updates::spawn(&state, &user, "deployment", &name, &action, move |log| async move {
+    let d = fetch(&state, &name).await?;
+    Ok(Json(run_action(&state, &user, d, &action).await?))
+}
+
+/// Starts an action on a deployment as a tracked update. Actions on the same
+/// deployment are serialized so overlapping deploys queue up.
+pub async fn run_action(state: &AppState, user: &User, d: Deployment, action: &str) -> AppResult<Update> {
+    let op = action.to_string();
+    let st = state.clone();
+    updates::spawn(state, user, "deployment", &d.name.clone(), action, move |log| async move {
+        let lock = st.lock_for(&format!("deployment:{}", d.name));
+        let _guard = match lock.try_lock() {
+            Ok(g) => g,
+            Err(_) => {
+                log.line("waiting for the previous operation on this deployment to finish…").await;
+                lock.lock().await
+            }
+        };
+        // Re-read so a queued deploy uses the latest saved configuration.
+        let d = sqlx::query_as::<_, Deployment>("SELECT * FROM deployments WHERE id = ?")
+            .bind(d.id)
+            .fetch_one(&st.db)
+            .await?;
+        let docker = &st.docker;
         match op.as_str() {
-            "deploy" => deploy(&docker, &log, &d).await,
-            "pull" => pull(&docker, &log, &d.image).await,
+            "deploy" if d.source == "git" => build_and_deploy(&st, &log, &d).await,
+            "deploy" => deploy(docker, &log, &d, &d.image, true).await,
+            "pull" if d.source == "git" => anyhow::bail!("git deployments are built, not pulled; deploy to rebuild"),
+            "pull" => pull(docker, &log, &d.image).await,
             "start" => Ok(docker.start_container(&d.name, None::<StartContainerOptions>).await?),
             "stop" => Ok(docker.stop_container(&d.name, None::<StopContainerOptions>).await?),
             "restart" => Ok(docker.restart_container(&d.name, None::<RestartContainerOptions>).await?),
-            "destroy" => destroy(&docker, &log, &d.name).await,
+            "destroy" => destroy(docker, &log, &d.name).await,
             _ => unreachable!(),
         }?;
         log.line(format!("{op} complete")).await;
         Ok(())
     })
-    .await?;
-    Ok(Json(update))
+    .await
+}
+
+/// Clones the branch, builds its Dockerfile into `harbor/<name>:<sha>`, and
+/// deploys the result.
+async fn build_and_deploy(state: &AppState, log: &UpdateLog, d: &Deployment) -> anyhow::Result<()> {
+    let checkout = state.builds_dir().join(&d.name);
+    let commit = git::clone(log, &d.git_url, &d.git_branch, &d.git_token, &checkout).await?;
+    log.line(format!("checked out {} \"{}\"", commit.short(), commit.message)).await;
+    log.set_detail(&format!("{} {}", commit.short(), commit.message)).await;
+    sqlx::query("UPDATE deployments SET last_seen_commit = ? WHERE id = ?")
+        .bind(&commit.sha)
+        .bind(d.id)
+        .execute(&state.db)
+        .await?;
+
+    let repo = format!("harbor/{}", d.name);
+    let tag = format!("{repo}:{}", &commit.sha[..commit.sha.len().min(12)]);
+    let build_args: Vec<String> = lines(&d.build_args).map(str::to_string).collect();
+    let built = git::build(log, &checkout, &d.build_context, &d.dockerfile, &build_args, &[tag.clone(), format!("{repo}:latest")]).await;
+    // The checkout is only needed for the build.
+    tokio::fs::remove_dir_all(&checkout).await.ok();
+    built?;
+
+    deploy(&state.docker, log, d, &tag, false).await?;
+    sqlx::query("UPDATE deployments SET image = ?, last_commit = ?, last_commit_message = ? WHERE id = ?")
+        .bind(&tag)
+        .bind(&commit.sha)
+        .bind(&commit.message)
+        .bind(d.id)
+        .execute(&state.db)
+        .await?;
+    Ok(())
 }
 
 /// The image API pulls *every* tag when none is given, unlike the CLI which
@@ -313,10 +487,12 @@ async fn destroy(docker: &Docker, log: &UpdateLog, name: &str) -> anyhow::Result
     Ok(())
 }
 
-async fn deploy(docker: &Docker, log: &UpdateLog, d: &Deployment) -> anyhow::Result<()> {
-    if let Err(e) = pull(docker, log, &d.image).await {
+/// (Re)creates the deployment's container from `image`, pulling it first
+/// when `pull_first` is set.
+async fn deploy(docker: &Docker, log: &UpdateLog, d: &Deployment, image: &str, pull_first: bool) -> anyhow::Result<()> {
+    if pull_first && let Err(e) = pull(docker, log, image).await {
         // Locally built images can't be pulled; carry on if the image exists.
-        if docker.inspect_image(&d.image).await.is_ok() {
+        if docker.inspect_image(image).await.is_ok() {
             log.line(format!("pull failed ({e}); using local image")).await;
         } else {
             return Err(e);
@@ -331,7 +507,7 @@ async fn deploy(docker: &Docker, log: &UpdateLog, d: &Deployment) -> anyhow::Res
     let restart = parse_restart(&d.restart).map_err(|e| anyhow::anyhow!(e.message))?;
 
     let body = ContainerCreateBody {
-        image: Some(d.image.clone()),
+        image: Some(image.to_string()),
         env: (!env.is_empty()).then_some(env),
         cmd: (!cmd.is_empty()).then_some(cmd),
         exposed_ports: (!exposed.is_empty()).then_some(exposed),
@@ -360,11 +536,139 @@ async fn deploy(docker: &Docker, log: &UpdateLog, d: &Deployment) -> anyhow::Res
     for w in created.warnings {
         log.line(format!("warning: {w}")).await;
     }
-    log.line(format!("created container {}", &created.id[..12])).await;
+    log.line(format!("created container {} from {image}", &created.id[..12])).await;
     docker
         .start_container(&d.name, None::<StartContainerOptions>)
         .await?;
     log.line("container started").await;
+    Ok(())
+}
+
+fn system_user(name: &str) -> User {
+    User {
+        id: 0,
+        username: name.to_string(),
+    }
+}
+
+async fn has_running_deploy(state: &AppState, name: &str) -> anyhow::Result<bool> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM updates WHERE target_type = 'deployment' AND target_name = ? AND status = 'running'",
+    )
+    .bind(name)
+    .fetch_one(&state.db)
+    .await?
+        > 0)
+}
+
+/// Triggers a deploy for a new commit, recording it as seen first so the
+/// same commit is never deployed twice by the webhook and poller.
+async fn deploy_commit(state: &AppState, d: Deployment, sha: &str, by: &str) -> AppResult<Update> {
+    sqlx::query("UPDATE deployments SET last_seen_commit = ? WHERE id = ?")
+        .bind(sha)
+        .bind(d.id)
+        .execute(&state.db)
+        .await?;
+    run_action(state, &system_user(by), d, "deploy").await
+}
+
+/// GitHub push webhook. Configure it with the deployment's webhook secret and
+/// content type `application/json`.
+async fn github_webhook(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    let unauthorized = || AppError::new(StatusCode::UNAUTHORIZED, "invalid webhook signature");
+    // An unknown name looks the same as a bad signature, so deployment names
+    // can't be probed without the secret.
+    let d = fetch(&state, &name).await.map_err(|_| unauthorized())?;
+    let signature = headers
+        .get("x-hub-signature-256")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if d.webhook_secret.is_empty() || !git::verify_signature(&d.webhook_secret, &body, signature) {
+        return Err(unauthorized());
+    }
+    let event = headers
+        .get("x-github-event")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let ignored = |reason: &str| Ok((StatusCode::ACCEPTED, Json(json!({ "ignored": reason }))));
+    match event {
+        "ping" => return Ok((StatusCode::OK, Json(json!({ "ok": true })))),
+        "push" => {}
+        other => return ignored(&format!("event '{other}' is not handled")),
+    }
+
+    let payload: Value = serde_json::from_slice(&body).map_err(|e| AppError::bad_request(format!("invalid payload: {e}")))?;
+    if d.source != "git" {
+        return ignored("deployment is not built from git");
+    }
+    if payload["ref"].as_str() != Some(&format!("refs/heads/{}", d.git_branch)) {
+        return ignored("push is not to the deployed branch");
+    }
+    if !d.auto_deploy {
+        return ignored("auto-deploy is disabled");
+    }
+    let sha = payload["after"].as_str().unwrap_or_default().to_string();
+    if sha.is_empty() || sha.chars().all(|c| c == '0') {
+        return ignored("branch was deleted");
+    }
+    if sha == d.last_seen_commit {
+        return ignored("commit already deployed");
+    }
+    let update = deploy_commit(&state, d, &sha, "github").await?;
+    Ok((StatusCode::OK, Json(json!({ "update_id": update.id }))))
+}
+
+/// Polls auto-deploy repositories for new commits, so pushes deploy even when
+/// GitHub can't reach this server. `HARBOR_GIT_POLL_SECS=0` disables it.
+pub fn spawn_poller(state: AppState) {
+    let secs: u64 = std::env::var("HARBOR_GIT_POLL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    if secs == 0 {
+        tracing::info!("git polling disabled");
+        return;
+    }
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(secs));
+        loop {
+            tick.tick().await;
+            let due = sqlx::query_as::<_, Deployment>("SELECT * FROM deployments WHERE source = 'git' AND auto_deploy = 1")
+                .fetch_all(&state.db)
+                .await
+                .unwrap_or_default();
+            for d in due {
+                if let Err(e) = poll_one(&state, d).await {
+                    tracing::warn!("auto-deploy check failed: {e:#}");
+                }
+            }
+        }
+    });
+}
+
+async fn poll_one(state: &AppState, d: Deployment) -> anyhow::Result<()> {
+    // A long build would otherwise queue a deploy on every tick.
+    if has_running_deploy(state, &d.name).await? {
+        return Ok(());
+    }
+    let head = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        git::remote_head(&d.git_url, &d.git_branch, &d.git_token),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out checking {}", d.name))??;
+    let Some(sha) = head else {
+        anyhow::bail!("branch '{}' not found for {}", d.git_branch, d.name);
+    };
+    if sha != d.last_seen_commit {
+        tracing::info!("new commit {} for {}; deploying", &sha[..7.min(sha.len())], d.name);
+        deploy_commit(state, d, &sha, "auto-deploy").await.map_err(|e| anyhow::anyhow!(e.message))?;
+    }
     Ok(())
 }
 

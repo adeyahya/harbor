@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { Box, Cpu, HardDrive, Layers, MemoryStick, Plus } from 'lucide-react'
+import { Box, Cpu, GitBranch, HardDrive, Layers, MemoryStick, Plus } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Link, Outlet, useLocation } from 'react-router'
-import { api, type ContainerSummary, type DeploymentListItem, type Port, type StackListItem, type SystemOverview } from '@/api'
+import { api, repoLabel, type ContainerSummary, type DeploymentListItem, type Port, type StackListItem, type SystemOverview } from '@/api'
 import { useCreate } from '@/components/app/CreateDialog'
+import { GithubIcon } from '@/components/app/GithubIcon'
 import { ErrorAlert, Loading } from '@/components/app/page'
 import { Status, StatusDot } from '@/components/app/status'
 import { Button } from '@/components/ui/button'
@@ -77,7 +78,7 @@ function ServiceCard({ to, icon, name, selected, children, status }: { to: strin
       to={to}
       data-service-card
       className={cn(
-        'group flex w-full flex-col rounded-2xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-lg hover:shadow-black/20 sm:w-72',
+        'group flex w-full min-w-0 flex-col rounded-2xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-lg hover:shadow-black/20 sm:w-72',
         selected && 'border-brand/70 ring-3 ring-brand/20',
       )}
     >
@@ -104,13 +105,16 @@ function EmptyCanvas() {
         <Plus className="size-5" />
       </div>
       <h2 className="text-xl font-semibold">Nothing deployed yet</h2>
-      <p className="mt-2 text-sm text-muted-foreground">Create a stack from a compose file or deploy a single container from an image.</p>
-      <div className="mt-6 flex gap-2">
-        <Button onClick={() => create('stack')}>
-          <Layers /> New stack
+      <p className="mt-2 text-sm text-muted-foreground">Deploy from a GitHub repo, run an image, or start a compose stack.</p>
+      <div className="mt-6 flex flex-wrap justify-center gap-2">
+        <Button onClick={() => create('repo')}>
+          <GithubIcon /> GitHub repo
         </Button>
-        <Button variant="outline" onClick={() => create('deployment')}>
-          <Box /> New deployment
+        <Button variant="outline" onClick={() => create('image')}>
+          <Box /> Docker image
+        </Button>
+        <Button variant="outline" onClick={() => create('stack')}>
+          <Layers /> Stack
         </Button>
       </div>
     </div>
@@ -171,8 +175,31 @@ export function CanvasPage() {
             {deployments.data?.map((d) => {
               const c = d.container_id ? byId.get(d.container_id) : undefined
               return (
-                <ServiceCard key={`d-${d.name}`} to={`/deployments/${d.name}`} icon={<Box className="size-4.5" />} name={d.name} status={d.status} selected={pathname === `/deployments/${d.name}`}>
-                  <p className="truncate font-mono text-xs text-muted-foreground">{d.image}</p>
+                <ServiceCard
+                  key={`d-${d.name}`}
+                  to={`/deployments/${d.name}`}
+                  icon={d.source === 'git' ? <GithubIcon className="size-4.5" /> : <Box className="size-4.5" />}
+                  name={d.name}
+                  status={d.status}
+                  selected={pathname === `/deployments/${d.name}`}
+                >
+                  {d.source === 'git' ? (
+                    <div className="space-y-1 text-xs">
+                      <div className="flex items-center gap-1.5 text-muted-foreground">
+                        <span className="truncate font-medium text-foreground/90">{repoLabel(d.git_url)}</span>
+                        <GitBranch className="size-3 shrink-0" />
+                        <span className="truncate font-mono">{d.git_branch}</span>
+                      </div>
+                      {d.last_commit && (
+                        <div className="flex items-center gap-1.5 text-muted-foreground">
+                          <span className="font-mono text-brand">{d.last_commit.slice(0, 7)}</span>
+                          <span className="truncate">{d.last_commit_message}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="truncate font-mono text-xs text-muted-foreground">{d.image}</p>
+                  )}
                   <PortLinks ports={c ? publicPorts(c.Ports) : []} />
                 </ServiceCard>
               )

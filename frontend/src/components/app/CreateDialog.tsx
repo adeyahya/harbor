@@ -7,9 +7,11 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { GithubIcon } from './GithubIcon'
 import { ErrorAlert } from './page'
 
-type Kind = 'stack' | 'deployment'
+/** `repo` and `image` both create deployments, from different sources. */
+type Kind = 'repo' | 'image' | 'stack'
 
 const STACK_TEMPLATE = `services:
   app:
@@ -43,8 +45,9 @@ export function CreateProvider({ children }: { children: ReactNode }) {
 
 function KindPicker({ onPick }: { onPick: (k: Kind) => void }) {
   const options = [
-    { kind: 'stack' as const, icon: Layers, title: 'Stack', body: 'A Docker Compose project with one or more services.' },
-    { kind: 'deployment' as const, icon: Box, title: 'Deployment', body: 'A single container running a Docker image.' },
+    { kind: 'repo' as const, icon: <GithubIcon className="size-4.5" />, title: 'GitHub repo', body: 'Build a Dockerfile from a repository and redeploy on push.' },
+    { kind: 'image' as const, icon: <Box className="size-4.5" />, title: 'Docker image', body: 'Run a single container from a registry image.' },
+    { kind: 'stack' as const, icon: <Layers className="size-4.5" />, title: 'Compose stack', body: 'A Docker Compose project with one or more services.' },
   ]
   return (
     <>
@@ -56,7 +59,7 @@ function KindPicker({ onPick }: { onPick: (k: Kind) => void }) {
         {options.map((o) => (
           <button key={o.kind} onClick={() => onPick(o.kind)} className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-accent">
             <div className="flex size-9 items-center justify-center rounded-lg border bg-muted text-brand">
-              <o.icon className="size-4.5" />
+              {o.icon}
             </div>
             <div>
               <div className="text-sm font-medium">{o.title}</div>
@@ -69,20 +72,39 @@ function KindPicker({ onPick }: { onPick: (k: Kind) => void }) {
   )
 }
 
+const titles: Record<Kind, string> = { repo: 'Deploy from GitHub', image: 'Deploy an image', stack: 'New stack' }
+const descriptions: Record<Kind, string> = {
+  repo: 'Harbor clones the branch, builds its Dockerfile and runs the image.',
+  image: 'You can add ports, volumes and variables next.',
+  stack: 'Starts from a sample compose file you can edit next.',
+}
+
+/** Suggests a service name from a repo like `acme/web-api` or a URL. */
+function nameFromRepo(repo: string) {
+  const last = repo.trim().replace(/\/$/, '').replace(/\.git$/, '').split(/[/:]/).pop() ?? ''
+  return last.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^[-_]+/, '').slice(0, 63)
+}
+
 function CreateForm({ kind, onBack, onDone }: { kind: Kind; onBack: () => void; onDone: () => void }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [name, setName] = useState('')
+  const [nameTouched, setNameTouched] = useState(false)
   const [image, setImage] = useState('')
+  const [repo, setRepo] = useState('')
+  const [branch, setBranch] = useState('')
+  const path = kind === 'stack' ? 'stacks' : 'deployments'
   const create = useMutation({
     mutationFn: () =>
       kind === 'stack'
         ? api.post('/stacks', { name, compose: STACK_TEMPLATE, env: 'PORT=8080\n' })
-        : api.post('/deployments', { name, image, restart: 'unless-stopped' }),
+        : kind === 'image'
+          ? api.post('/deployments', { name, source: 'image', image, restart: 'unless-stopped' })
+          : api.post('/deployments', { name, source: 'git', git_url: repo, git_branch: branch, restart: 'unless-stopped' }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: [`${kind}s`] })
+      qc.invalidateQueries({ queryKey: [path] })
       onDone()
-      navigate(`/${kind}s/${name}?tab=settings`)
+      navigate(`/${path}/${name}?tab=settings`)
     },
   })
   return (
@@ -97,17 +119,53 @@ function CreateForm({ kind, onBack, onDone }: { kind: Kind; onBack: () => void; 
           <button type="button" onClick={onBack} className="-ml-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Back">
             <ArrowLeft className="size-4" />
           </button>
-          New {kind}
+          {titles[kind]}
         </DialogTitle>
-        <DialogDescription>{kind === 'stack' ? 'Starts from a sample compose file you can edit next.' : 'You can add ports, volumes and variables next.'}</DialogDescription>
+        <DialogDescription>{descriptions[kind]}</DialogDescription>
       </DialogHeader>
       <div className="space-y-4 px-5 py-4">
+        {kind === 'repo' && (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor="create-repo">Repository</Label>
+              <Input
+                id="create-repo"
+                value={repo}
+                onChange={(e) => {
+                  setRepo(e.target.value)
+                  if (!nameTouched) setName(nameFromRepo(e.target.value))
+                }}
+                placeholder="owner/repo or https://…"
+                className="font-mono"
+                autoFocus
+                required
+              />
+              <p className="text-xs text-muted-foreground">Private repo? Add an access token in Settings after creating.</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="create-branch">Branch</Label>
+              <Input id="create-branch" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="Default branch" className="font-mono" />
+              <p className="text-xs text-muted-foreground">Leave empty to use the repository's default branch.</p>
+            </div>
+          </>
+        )}
         <div className="space-y-2">
-          <Label htmlFor="create-name">Name</Label>
-          <Input id="create-name" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder={kind === 'stack' ? 'my-app' : 'my-service'} autoFocus required pattern="[a-z0-9][a-z0-9_\-]*" />
+          <Label htmlFor="create-name">Service name</Label>
+          <Input
+            id="create-name"
+            value={name}
+            onChange={(e) => {
+              setNameTouched(true)
+              setName(e.target.value.toLowerCase())
+            }}
+            placeholder={kind === 'stack' ? 'my-app' : 'my-service'}
+            autoFocus={kind !== 'repo'}
+            required
+            pattern="[a-z0-9][a-z0-9_\-]*"
+          />
           <p className="text-xs text-muted-foreground">Lowercase letters, digits, - and _.</p>
         </div>
-        {kind === 'deployment' && (
+        {kind === 'image' && (
           <div className="space-y-2">
             <Label htmlFor="create-image">Image</Label>
             <Input id="create-image" value={image} onChange={(e) => setImage(e.target.value)} placeholder="nginx:alpine" className="font-mono" required />
@@ -120,7 +178,7 @@ function CreateForm({ kind, onBack, onDone }: { kind: Kind; onBack: () => void; 
           Cancel
         </Button>
         <Button type="submit" disabled={create.isPending}>
-          Create {kind}
+          Create
         </Button>
       </div>
     </form>

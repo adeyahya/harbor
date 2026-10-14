@@ -116,7 +116,8 @@ export interface ContainerSummary {
   Created: number
   State: string
   Status: string
-  Ports: Port[]
+  /** Omitted by newer Docker versions when nothing is published. */
+  Ports?: Port[] | null
   Labels: Record<string, string>
 }
 
@@ -161,13 +162,28 @@ export interface Network {
 
 export type StackStatus = 'running' | 'stopped' | 'unhealthy' | 'down'
 
+export type StackSource = 'inline' | 'git'
+
 export interface Stack {
   id: number
   name: string
+  /** Compose file content (inline stacks). */
   compose: string
   env: string
   created_at: string
   updated_at: string
+  /** Directory compose resolves relative paths against; empty = Harbor's own. */
+  project_dir: string
+  source: StackSource
+  git_url: string
+  git_branch: string
+  has_token: boolean
+  /** Compose file path inside the repository. */
+  compose_path: string
+  auto_deploy: boolean
+  webhook_secret: string
+  last_commit: string
+  last_commit_message: string
 }
 
 export interface StackListItem extends Stack {
@@ -208,6 +224,10 @@ export interface Deployment {
   webhook_secret: string
   last_commit: string
   last_commit_message: string
+  /** Container this deployment took over on import, until its first deploy. */
+  adopted_container: string
+  /** Extra container labels, KEY=value per line. */
+  labels: string
 }
 
 /** `owner/repo` for GitHub URLs, otherwise the URL itself. */
@@ -225,4 +245,53 @@ export interface DeploymentListItem extends Deployment {
 export interface DeploymentDetail extends Deployment {
   status: string
   container: ContainerInspect | null
+}
+
+// Importing containers Harbor didn't create (e.g. from Komodo).
+export interface ImportContainerSummary {
+  name: string
+  service: string | null
+  image: string
+  state: string
+  status: string
+}
+
+export interface ImportStackCandidate {
+  project: string
+  working_dir: string
+  config_files: string[]
+  containers: ImportContainerSummary[]
+  compose_readable: boolean
+  git_url: string | null
+  git_branch: string | null
+  git_had_credentials: boolean
+  name_ok: boolean
+  is_komodo: boolean
+  is_harbor: boolean
+}
+
+export interface ImportContainerCandidate extends ImportContainerSummary {
+  suggested_name: string
+  ports: string[]
+  is_komodo: boolean
+  is_harbor: boolean
+}
+
+export interface ImportCandidates {
+  stacks: ImportStackCandidate[]
+  containers: ImportContainerCandidate[]
+}
+
+export interface ContainerImportPreview {
+  container: string
+  suggested_name: string
+  image: string
+  ports: string
+  env: string
+  volumes: string
+  network: string
+  restart: string
+  command: string
+  labels: string
+  warnings: string[]
 }

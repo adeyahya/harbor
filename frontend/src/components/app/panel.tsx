@@ -195,7 +195,22 @@ function serializeVars(lines: (VarLine | string)[]): string {
  * Railway-style variables table backed by a plain `KEY=value` text blob,
  * with a raw editor toggle. Comments survive edits made in the table.
  */
-export function VariablesEditor({ value, onChange, description }: { value: string; onChange: (v: string) => void; description?: ReactNode }) {
+export function VariablesEditor({
+  value,
+  onChange,
+  description,
+  secret = true,
+  keyPlaceholder = 'VARIABLE_NAME',
+  noun = 'variable',
+}: {
+  value: string
+  onChange: (v: string) => void
+  description?: ReactNode
+  /** Mask values until revealed (off for non-secret pairs like labels). */
+  secret?: boolean
+  keyPlaceholder?: string
+  noun?: string
+}) {
   const [raw, setRaw] = useState(false)
   const [revealed, setRevealed] = useState<Set<number>>(new Set())
   const lines = parseVars(value)
@@ -222,7 +237,8 @@ export function VariablesEditor({ value, onChange, description }: { value: strin
         <p className="text-sm text-muted-foreground">
           {description ?? (
             <>
-              {vars.length} service variable{vars.length === 1 ? '' : 's'}
+              {vars.length} {noun}
+              {vars.length === 1 ? '' : 's'}
             </>
           )}
         </p>
@@ -232,7 +248,7 @@ export function VariablesEditor({ value, onChange, description }: { value: strin
           </Button>
           {!raw && (
             <Button size="sm" onClick={add}>
-              <Plus /> New variable
+              <Plus /> New {noun}
             </Button>
           )}
         </div>
@@ -241,10 +257,10 @@ export function VariablesEditor({ value, onChange, description }: { value: strin
         <CodeEditor value={value} onChange={onChange} placeholder={'KEY=value\n# comments are allowed'} minRows={12} />
       ) : vars.length === 0 ? (
         <div className="rounded-xl border border-dashed px-6 py-10 text-center">
-          <p className="text-sm font-medium">No variables</p>
-          <p className="mt-1 text-sm text-muted-foreground">Add environment variables to configure this service.</p>
+          <p className="text-sm font-medium">No {noun}s</p>
+          {secret && <p className="mt-1 text-sm text-muted-foreground">Add environment variables to configure this service.</p>}
           <Button variant="outline" size="sm" className="mt-4" onClick={add}>
-            <Plus /> Add variable
+            <Plus /> Add {noun}
           </Button>
         </div>
       ) : (
@@ -254,21 +270,23 @@ export function VariablesEditor({ value, onChange, description }: { value: strin
               <input
                 value={l.key}
                 onChange={(e) => update(i, { key: e.target.value.replace(/[^A-Za-z0-9_.-]/g, '') })}
-                placeholder="VARIABLE_NAME"
+                placeholder={keyPlaceholder}
                 autoFocus={l.key === '' && l.value === ''}
                 className="h-8 w-[38%] min-w-0 rounded-md bg-transparent px-2 font-mono text-[12.5px] font-medium outline-none placeholder:text-muted-foreground/60 hover:bg-accent/50 focus:bg-accent/60"
               />
               <input
                 value={l.value}
-                type={revealed.has(i) || l.value === '' ? 'text' : 'password'}
+                type={!secret || revealed.has(i) || l.value === '' ? 'text' : 'password'}
                 onChange={(e) => update(i, { value: e.target.value })}
                 placeholder="value"
                 className="h-8 min-w-0 flex-1 rounded-md bg-transparent px-2 font-mono text-[12.5px] text-muted-foreground outline-none placeholder:text-muted-foreground/60 hover:bg-accent/50 focus:bg-accent/60 focus:text-foreground"
               />
-              <Button variant="ghost" size="icon-sm" onClick={() => toggle(i)} title={revealed.has(i) ? 'Hide value' : 'Show value'}>
-                {revealed.has(i) ? <EyeOff /> : <Eye />}
-              </Button>
-              <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => remove(i)} title="Remove variable">
+              {secret && (
+                <Button variant="ghost" size="icon-sm" onClick={() => toggle(i)} title={revealed.has(i) ? 'Hide value' : 'Show value'}>
+                  {revealed.has(i) ? <EyeOff /> : <Eye />}
+                </Button>
+              )}
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => remove(i)} title={`Remove ${noun}`}>
                 <Trash2 />
               </Button>
             </div>

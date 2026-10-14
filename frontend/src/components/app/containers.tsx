@@ -10,7 +10,8 @@ import { Confirm } from './confirm'
 import { Status } from './status'
 import { useRunAction } from './updates'
 
-export function PortChips({ ports }: { ports: Port[] }) {
+export function PortChips({ ports }: { ports?: Port[] | null }) {
+  ports = ports ?? []
   // Docker reports IPv4 and IPv6 bindings separately; show each mapping once.
   const unique = [...new Map(ports.map((p) => [`${p.PublicPort}-${p.PrivatePort}-${p.Type}`, p])).values()].sort((a, b) => a.PrivatePort - b.PrivatePort)
   if (!unique.length) return <span className="text-muted-foreground/60">—</span>

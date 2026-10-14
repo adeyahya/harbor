@@ -97,6 +97,156 @@ pub async fn remote_head(url: &str, branch: &str, token: &str) -> anyhow::Result
     }))
 }
 
+/// Brings `dir` to the head of `branch`: fetches and hard-resets an existing
+/// checkout in place, or clones into an empty/missing directory.
+///
+/// Untracked and ignored files are left alone (no `git clean`): for stacks the
+/// checkout is the compose project directory and may hold data next to the
+/// code. Local edits to tracked files are discarded, and listed in the log.
+pub async fn sync_checkout(log: &UpdateLog, dir: &Path, url: &str, branch: &str, token: &str) -> anyhow::Result<Commit> {
+    if !dir.join(".git").exists() {
+        let has_files = std::fs::read_dir(dir).map(|mut d| d.next().is_some()).unwrap_or(false);
+        if has_files {
+            anyhow::bail!("{} exists but isn't a git checkout", dir.display());
+        }
+        return clone(log, url, branch, token, dir).await;
+    }
+    fetch_and_reset(log, dir, url, branch, token).await
+}
+
+/// Fetches `rev` (a branch or commit) from `url` into an existing checkout and
+/// resets to it.
+pub async fn fetch_and_reset(log: &UpdateLog, dir: &Path, url: &str, rev: &str, token: &str) -> anyhow::Result<Commit> {
+    let mut status = git(token);
+    status.args(["status", "--porcelain", "--untracked-files=no"]).current_dir(dir);
+    let dirty = process::output(status).await.unwrap_or_default();
+    if !dirty.is_empty() {
+        log.line(format!("discarding local changes to tracked files:\n{dirty}")).await;
+    }
+    // Fetch from the configured URL rather than `origin`, which may point at
+    // another host or carry stale embedded credentials.
+    let mut fetch = git(token);
+    fetch.args(["fetch", "--depth", "1", "--", url, rev]).current_dir(dir);
+    process::run(log, fetch, &format!("git fetch --depth 1 {} {rev}", display_repo(url))).await?;
+    let mut reset = git(token);
+    reset.args(["reset", "--hard", "FETCH_HEAD"]).current_dir(dir);
+    process::run(log, reset, "git reset --hard FETCH_HEAD").await?;
+    head(dir).await
+}
+
+async fn head(dir: &Path) -> anyhow::Result<Commit> {
+    let mut rev = git("");
+    rev.args(["log", "-1", "--format=%H%n%s"]).current_dir(dir);
+    let out = process::output(rev).await?;
+    let (sha, message) = out.split_once('\n').unwrap_or((&out, ""));
+    Ok(Commit {
+        sha: sha.to_string(),
+        message: message.to_string(),
+    })
+}
+
+/// Origin URL (credentials stripped) and current branch of an existing
+/// checkout, e.g. one Komodo created.
+pub struct RepoInfo {
+    /// Top of the checkout, which may be above the directory asked about.
+    pub root: std::path::PathBuf,
+    pub url: String,
+    pub branch: String,
+    /// The origin URL had a token or password embedded in it.
+    pub had_credentials: bool,
+}
+
+/// Looks for a git checkout containing `dir` (it may be a subfolder of it).
+pub async fn repo_info(dir: &Path) -> Option<RepoInfo> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let mut top = git("");
+    top.args(["rev-parse", "--show-toplevel"]).current_dir(dir);
+    let root = std::path::PathBuf::from(process::output(top).await.ok()?);
+    let mut url = git("");
+    url.args(["remote", "get-url", "origin"]).current_dir(dir);
+    let url = process::output(url).await.ok()?;
+    let mut branch = git("");
+    branch.args(["rev-parse", "--abbrev-ref", "HEAD"]).current_dir(dir);
+    let branch = process::output(branch).await.unwrap_or_default();
+    let (url, had_credentials) = strip_credentials(&url);
+    Some(RepoInfo {
+        root,
+        url,
+        branch: if branch == "HEAD" { String::new() } else { branch },
+        had_credentials,
+    })
+}
+
+/// Removes `user:token@` from an https URL.
+pub fn strip_credentials(url: &str) -> (String, bool) {
+    if let Some((scheme, rest)) = url.split_once("://")
+        && let Some((userinfo, host)) = rest.split_once('@')
+        && !userinfo.contains('/')
+    {
+        return (format!("{scheme}://{host}"), true);
+    }
+    (url.to_string(), false)
+}
+
+/// Resolves an empty branch to the repository's default branch.
+pub async fn resolve_branch(url: &str, branch: &str, token: &str) -> Result<String, String> {
+    if !branch.trim().is_empty() {
+        return Ok(branch.trim().to_string());
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(20), default_branch(url, token))
+        .await
+        .map_err(|_| "timed out contacting the repository".to_string())?
+        .map_err(|e| format!("couldn't reach the repository: {e:#}"))
+}
+
+/// Outcome of a GitHub webhook delivery.
+pub enum Push {
+    Ping,
+    Ignored(String),
+    Deploy(String),
+}
+
+/// Verifies and interprets a GitHub webhook for a resource tracking `branch`.
+/// `Err` means the signature didn't check out.
+pub fn parse_push(
+    headers: &axum::http::HeaderMap,
+    body: &[u8],
+    secret: &str,
+    branch: &str,
+    auto_deploy: bool,
+    last_seen: &str,
+) -> Result<Push, ()> {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or_default();
+    if secret.is_empty() || !verify_signature(secret, body, header("x-hub-signature-256")) {
+        return Err(());
+    }
+    let ignored = |reason: &str| Ok(Push::Ignored(reason.to_string()));
+    match header("x-github-event") {
+        "ping" => return Ok(Push::Ping),
+        "push" => {}
+        other => return ignored(&format!("event '{other}' is not handled")),
+    }
+    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return ignored("invalid payload");
+    };
+    if payload["ref"].as_str() != Some(&format!("refs/heads/{branch}")) {
+        return ignored("push is not to the deployed branch");
+    }
+    if !auto_deploy {
+        return ignored("auto-deploy is disabled");
+    }
+    let sha = payload["after"].as_str().unwrap_or_default();
+    if sha.is_empty() || sha.chars().all(|c| c == '0') {
+        return ignored("branch was deleted");
+    }
+    if sha == last_seen {
+        return ignored("commit already deployed");
+    }
+    Ok(Push::Deploy(sha.to_string()))
+}
+
 /// The remote's default branch (what `HEAD` points at).
 pub async fn default_branch(url: &str, token: &str) -> anyhow::Result<String> {
     let mut cmd = git(token);
@@ -189,6 +339,14 @@ mod tests {
         assert_eq!(normalize_url("git@github.com:a/b.git"), "git@github.com:a/b.git");
         assert_eq!(normalize_url("file:///tmp/repo.git"), "file:///tmp/repo.git");
         assert_eq!(display_repo("https://github.com/acme/api.git"), "acme/api");
+    }
+
+    #[test]
+    fn strips_url_credentials() {
+        assert_eq!(strip_credentials("https://ghp_x@github.com/a/b.git"), ("https://github.com/a/b.git".into(), true));
+        assert_eq!(strip_credentials("https://u:p@github.com/a/b"), ("https://github.com/a/b".into(), true));
+        assert_eq!(strip_credentials("https://github.com/a/b.git"), ("https://github.com/a/b.git".into(), false));
+        assert_eq!(strip_credentials("git@github.com:a/b.git"), ("git@github.com:a/b.git".into(), false));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Box, Cpu, GitBranch, HardDrive, Layers, MemoryStick, Plus } from 'lucide-react'
+import { ArrowRight, Box, Cpu, GitBranch, HardDrive, Layers, MemoryStick, PackageOpen, Plus } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Link, Outlet, useLocation } from 'react-router'
 import { api, repoLabel, type ContainerSummary, type DeploymentListItem, type Port, type StackListItem, type SystemOverview } from '@/api'
@@ -9,6 +9,7 @@ import { ErrorAlert, Loading } from '@/components/app/page'
 import { Status, StatusDot } from '@/components/app/status'
 import { Button } from '@/components/ui/button'
 import { bytes, containerName, percent } from '@/lib/format'
+import { importableCount, useImportCandidates } from '@/pages/Import'
 import { cn } from '@/lib/utils'
 
 function Meter({ icon, label, value, detail }: { icon: ReactNode; label: string; value: number; detail: string }) {
@@ -128,6 +129,7 @@ export function CanvasPage() {
   const stacks = useQuery({ queryKey: ['stacks'], queryFn: () => api.get<StackListItem[]>('/stacks'), refetchInterval: 4000 })
   const deployments = useQuery({ queryKey: ['deployments'], queryFn: () => api.get<DeploymentListItem[]>('/deployments'), refetchInterval: 4000 })
   const containers = useQuery({ queryKey: ['containers'], queryFn: () => api.get<ContainerSummary[]>('/docker/containers'), refetchInterval: 4000 })
+  const importable = importableCount(useImportCandidates().data)
 
   const byProject = new Map<string, ContainerSummary[]>()
   for (const c of containers.data ?? []) {
@@ -143,6 +145,23 @@ export function CanvasPage() {
       <div className="mx-auto max-w-6xl space-y-8 px-4 py-6 sm:px-6">
         <ErrorAlert error={system.data?.docker_error && `Docker is unreachable: ${system.data.docker_error}`} />
         <HostBar system={system.data} />
+        {importable > 0 && (
+          <Link
+            to="/import"
+            className="flex items-center gap-3 rounded-xl border border-brand/30 bg-brand/10 px-4 py-3 text-sm transition-colors hover:border-brand/50 hover:bg-brand/15"
+          >
+            <PackageOpen className="size-4.5 shrink-0 text-brand" />
+            <span className="min-w-0 flex-1">
+              <span className="font-medium">
+                {importable} {importable === 1 ? 'service on this server isn\'t' : 'services on this server aren\'t'} managed by Harbor yet.
+              </span>{' '}
+              <span className="text-muted-foreground">Import them to see them here and deploy them from GitHub.</span>
+            </span>
+            <span className="flex shrink-0 items-center gap-1 font-medium text-brand">
+              Review <ArrowRight className="size-4" />
+            </span>
+          </Link>
+        )}
 
         {loading ? (
           <Loading />
@@ -155,7 +174,22 @@ export function CanvasPage() {
             {stacks.data?.map((s) => {
               const services = byProject.get(s.name) ?? []
               return (
-                <ServiceCard key={`s-${s.name}`} to={`/stacks/${s.name}`} icon={<Layers className="size-4.5" />} name={s.name} status={s.status} selected={pathname === `/stacks/${s.name}`}>
+                <ServiceCard
+                  key={`s-${s.name}`}
+                  to={`/stacks/${s.name}`}
+                  icon={s.source === 'git' ? <GithubIcon className="size-4.5" /> : <Layers className="size-4.5" />}
+                  name={s.name}
+                  status={s.status}
+                  selected={pathname === `/stacks/${s.name}`}
+                >
+                  {s.source === 'git' && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <span className="truncate font-medium text-foreground/90">{repoLabel(s.git_url)}</span>
+                      <GitBranch className="size-3 shrink-0" />
+                      <span className="truncate font-mono">{s.git_branch}</span>
+                      {s.last_commit && <span className="shrink-0 font-mono text-brand">{s.last_commit.slice(0, 7)}</span>}
+                    </div>
+                  )}
                   {services.length ? (
                     <div className="flex flex-wrap gap-1.5">
                       {services.map((c) => (
@@ -168,7 +202,7 @@ export function CanvasPage() {
                   ) : (
                     <p className="text-xs text-muted-foreground">Compose stack · not running</p>
                   )}
-                  <PortLinks ports={publicPorts(services.flatMap((c) => c.Ports))} />
+                  <PortLinks ports={publicPorts(services.flatMap((c) => c.Ports ?? []))} />
                 </ServiceCard>
               )
             })}
@@ -200,7 +234,7 @@ export function CanvasPage() {
                   ) : (
                     <p className="truncate font-mono text-xs text-muted-foreground">{d.image}</p>
                   )}
-                  <PortLinks ports={c ? publicPorts(c.Ports) : []} />
+                  <PortLinks ports={c ? publicPorts(c.Ports ?? []) : []} />
                 </ServiceCard>
               )
             })}

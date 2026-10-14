@@ -4,6 +4,7 @@ mod deployments;
 mod docker;
 mod error;
 mod git;
+mod import;
 mod ports;
 mod process;
 mod stacks;
@@ -79,13 +80,14 @@ async fn main() -> anyhow::Result<()> {
         .nest("/stacks", stacks::router())
         .nest("/deployments", deployments::router())
         .nest("/ports", ports::router())
+        .nest("/import", import::router())
         .nest("/updates", updates::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_user));
 
     let api = Router::new()
         .route("/health", get(|| async { "ok" }))
         .nest("/auth", auth::router())
-        .nest("/webhooks", deployments::webhook_router())
+        .nest("/webhooks", deployments::webhook_router().merge(stacks::webhook_router()))
         .merge(protected)
         .fallback(|| async { error::AppError::not_found("no such endpoint") });
 

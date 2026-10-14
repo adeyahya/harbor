@@ -15,5 +15,8 @@ services:
       # Must be the SAME path on both sides: compose files in stacks are run
       # by the host's Docker, which resolves relative bind mounts on the host.
       - /var/lib/harbor:/var/lib/harbor
+      # Moving from Komodo? Mount its directory (same path) so imported stacks
+      # can keep running from where Komodo put them.
+      # - /etc/komodo:/etc/komodo
     environment:
       HARBOR_DATA_DIR: /var/lib/harbor

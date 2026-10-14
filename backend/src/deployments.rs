@@ -62,6 +62,11 @@ pub struct Deployment {
     pub last_commit: String,
     pub last_commit_message: String,
     pub last_seen_commit: String,
+    /// Name of a container this deployment took over on import. It keeps
+    /// running until the first deploy replaces it.
+    pub adopted_container: String,
+    /// Extra container labels, `KEY=value` per line.
+    pub labels: String,
 }
 
 fn is_set<S: Serializer>(value: &str, s: S) -> Result<S::Ok, S::Error> {
@@ -79,6 +84,8 @@ struct Snapshot {
     network: String,
     restart: String,
     command: String,
+    #[serde(default)]
+    labels: String,
 }
 
 impl Snapshot {
@@ -91,6 +98,7 @@ impl Snapshot {
             network: d.network.clone(),
             restart: d.restart.clone(),
             command: d.command.clone(),
+            labels: d.labels.clone(),
         }
     }
 
@@ -133,6 +141,8 @@ struct DeploymentInput {
     git_token: Option<String>,
     #[serde(default)]
     auto_deploy: bool,
+    #[serde(default)]
+    labels: String,
 }
 
 fn default_source() -> String {
@@ -198,6 +208,25 @@ async fn find_container(docker: &Docker, name: &str) -> AppResult<Option<Contain
     }
 }
 
+/// The deployment's container: its own, or the one it adopted on import.
+async fn deployment_container(docker: &Docker, d: &Deployment) -> AppResult<Option<ContainerInspectResponse>> {
+    if let Some(c) = find_container(docker, &d.name).await? {
+        return Ok(Some(c));
+    }
+    if d.adopted_container.is_empty() {
+        return Ok(None);
+    }
+    find_container(docker, &d.adopted_container).await
+}
+
+/// Name to address the deployment's running container by.
+async fn container_name(docker: &Docker, d: &Deployment) -> String {
+    match deployment_container(docker, d).await {
+        Ok(Some(c)) => c.name.map(|n| n.trim_start_matches('/').to_string()).unwrap_or_else(|| d.name.clone()),
+        _ => d.name.clone(),
+    }
+}
+
 fn container_status(c: &Option<ContainerInspectResponse>) -> String {
     c.as_ref()
         .and_then(|c| c.state.as_ref())
@@ -210,18 +239,23 @@ async fn list(State(state): State<AppState>) -> AppResult<Json<Vec<DeploymentWit
     let deployments = sqlx::query_as::<_, Deployment>("SELECT * FROM deployments ORDER BY name")
         .fetch_all(&state.db)
         .await?;
-    let containers = crate::docker::containers_with_label(&state.docker, LABEL)
+    // All containers, since imported ones don't carry Harbor's label yet.
+    let containers = state
+        .docker
+        .list_containers(Some(ListContainersOptions { all: true, ..Default::default() }))
         .await
         .unwrap_or_default();
     let items = deployments
         .into_iter()
         .map(|deployment| {
-            let c = containers.iter().find(|c| {
-                c.labels
-                    .as_ref()
-                    .and_then(|l| l.get(LABEL))
-                    .is_some_and(|n| *n == deployment.name)
-            });
+            let has_name = |c: &bollard::models::ContainerSummary, name: &str| {
+                !name.is_empty() && c.names.as_ref().is_some_and(|n| n.iter().any(|n| n.trim_start_matches('/') == name))
+            };
+            let c = containers
+                .iter()
+                .find(|c| c.labels.as_ref().and_then(|l| l.get(LABEL)).is_some_and(|n| *n == deployment.name))
+                .or_else(|| containers.iter().find(|c| has_name(c, &deployment.name)))
+                .or_else(|| containers.iter().find(|c| has_name(c, &deployment.adopted_container)));
             DeploymentWithStatus {
                 status: c
                     .and_then(|c| c.state)
@@ -238,7 +272,7 @@ async fn list(State(state): State<AppState>) -> AppResult<Json<Vec<DeploymentWit
 
 async fn detail(State(state): State<AppState>, Path(name): Path<String>) -> AppResult<Json<DeploymentDetail>> {
     let deployment = fetch(&state, &name).await?;
-    let container = find_container(&state.docker, &name).await?;
+    let container = deployment_container(&state.docker, &deployment).await?;
     Ok(Json(DeploymentDetail {
         status: container_status(&container),
         container,
@@ -248,16 +282,12 @@ async fn detail(State(state): State<AppState>, Path(name): Path<String>) -> AppR
 
 /// Fills in the default branch when a git deployment doesn't name one.
 async fn resolve_branch(input: &mut DeploymentInput, stored_token: &str) -> AppResult<()> {
-    if input.source != "git" || !input.git_branch.trim().is_empty() {
+    if input.source != "git" {
         return Ok(());
     }
     let url = git::normalize_url(&input.git_url);
     let token = input.git_token.as_deref().unwrap_or(stored_token);
-    let branch = tokio::time::timeout(std::time::Duration::from_secs(20), git::default_branch(&url, token))
-        .await
-        .map_err(|_| AppError::bad_request("timed out contacting the repository"))?
-        .map_err(|e| AppError::bad_request(format!("couldn't reach the repository: {e:#}")))?;
-    input.git_branch = branch;
+    input.git_branch = git::resolve_branch(&url, &input.git_branch, token).await.map_err(AppError::bad_request)?;
     Ok(())
 }
 
@@ -295,8 +325,8 @@ async fn create(State(state): State<AppState>, Json(mut input): Json<DeploymentI
     let ts = now();
     let d = sqlx::query_as::<_, Deployment>(
         "INSERT INTO deployments (name, image, ports, env, volumes, network, restart, command, created_at, updated_at,
-           source, git_url, git_branch, build_context, dockerfile, build_args, git_token, auto_deploy, webhook_secret)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+           source, git_url, git_branch, build_context, dockerfile, build_args, git_token, auto_deploy, webhook_secret, labels)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .bind(&name)
     .bind(input.image.trim())
@@ -317,6 +347,7 @@ async fn create(State(state): State<AppState>, Json(mut input): Json<DeploymentI
     .bind(input.git_token.as_deref().unwrap_or("").trim())
     .bind(input.auto_deploy)
     .bind(hex::encode(rand::random::<[u8; 20]>()))
+    .bind(&input.labels)
     .fetch_one(&state.db)
     .await?;
     Ok(Json(d))
@@ -336,7 +367,7 @@ async fn update(
            image = CASE WHEN ?1 = 'git' THEN image ELSE ?2 END,
            ports = ?3, env = ?4, volumes = ?5, network = ?6, restart = ?7, command = ?8, updated_at = ?9,
            source = ?1, git_url = ?10, git_branch = ?11, build_context = ?12, dockerfile = ?13, build_args = ?14,
-           git_token = COALESCE(?15, git_token), auto_deploy = ?16
+           git_token = COALESCE(?15, git_token), auto_deploy = ?16, labels = ?18
          WHERE name = ?17 RETURNING *",
     )
     .bind(&input.source)
@@ -356,6 +387,7 @@ async fn update(
     .bind(input.git_token.as_deref().map(str::trim))
     .bind(input.auto_deploy)
     .bind(&name)
+    .bind(&input.labels)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::not_found(format!("deployment '{name}' not found")))?;
@@ -364,7 +396,7 @@ async fn update(
 
 async fn remove(State(state): State<AppState>, Path(name): Path<String>) -> AppResult<Json<Deployment>> {
     let d = fetch(&state, &name).await?;
-    if find_container(&state.docker, &name).await?.is_some() {
+    if deployment_container(&state.docker, &d).await?.is_some() {
         return Err(AppError::conflict(
             "deployment still has a container; destroy it before deleting",
         ));
@@ -416,18 +448,26 @@ async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, roll
             .fetch_one(&st.db)
             .await?;
         let docker = &st.docker;
+        let cname = container_name(docker, &d).await;
         match op.as_str() {
             "deploy" if d.source == "git" => build_and_deploy(&st, &log, &d).await,
             "deploy" => deploy_image(docker, &log, &d).await,
             "rollback" => roll_back(&st, &log, &d, rollback_to.expect("rollback target")).await,
             "pull" if d.source == "git" => anyhow::bail!("git deployments are built, not pulled; deploy to rebuild"),
             "pull" => pull(docker, &log, &d.image).await,
-            "start" => Ok(docker.start_container(&d.name, None::<StartContainerOptions>).await?),
-            "stop" => Ok(docker.stop_container(&d.name, None::<StopContainerOptions>).await?),
-            "restart" => Ok(docker.restart_container(&d.name, None::<RestartContainerOptions>).await?),
-            "destroy" => destroy(docker, &log, &d.name).await,
+            "start" => Ok(docker.start_container(&cname, None::<StartContainerOptions>).await?),
+            "stop" => Ok(docker.stop_container(&cname, None::<StopContainerOptions>).await?),
+            "restart" => Ok(docker.restart_container(&cname, None::<RestartContainerOptions>).await?),
+            "destroy" => destroy_all(docker, &log, &d).await,
             _ => unreachable!(),
         }?;
+        // Once Harbor has created its own container, the imported one is gone.
+        if matches!(op.as_str(), "deploy" | "rollback" | "destroy") && !d.adopted_container.is_empty() {
+            sqlx::query("UPDATE deployments SET adopted_container = '' WHERE id = ?")
+                .bind(d.id)
+                .execute(&st.db)
+                .await?;
+        }
         log.line(format!("{op} complete")).await;
         Ok(())
     })
@@ -533,7 +573,7 @@ async fn roll_back(state: &AppState, log: &UpdateLog, d: &Deployment, target: Up
     // stays put so the poller doesn't immediately redeploy the newer head.
     let (commit, message) = detail.split_once(' ').unwrap_or((detail, ""));
     sqlx::query(
-        "UPDATE deployments SET image = ?, ports = ?, env = ?, volumes = ?, network = ?, restart = ?, command = ?, updated_at = ?,
+        "UPDATE deployments SET image = ?, ports = ?, env = ?, volumes = ?, network = ?, restart = ?, command = ?, labels = ?, updated_at = ?,
            last_commit = CASE WHEN source = 'git' THEN ? ELSE last_commit END,
            last_commit_message = CASE WHEN source = 'git' THEN ? ELSE last_commit_message END
          WHERE id = ?",
@@ -545,6 +585,7 @@ async fn roll_back(state: &AppState, log: &UpdateLog, d: &Deployment, target: Up
     .bind(&snapshot.network)
     .bind(&snapshot.restart)
     .bind(&snapshot.command)
+    .bind(&snapshot.labels)
     .bind(now())
     .bind(commit)
     .bind(message)
@@ -623,6 +664,24 @@ async fn destroy(docker: &Docker, log: &UpdateLog, name: &str) -> anyhow::Result
     Ok(())
 }
 
+/// Removes the deployment's container and, if it was imported, the original.
+async fn destroy_all(docker: &Docker, log: &UpdateLog, d: &Deployment) -> anyhow::Result<()> {
+    destroy(docker, log, &d.name).await?;
+    if !d.adopted_container.is_empty() && d.adopted_container != d.name {
+        log.line(format!("replacing imported container {}", d.adopted_container)).await;
+        destroy(docker, log, &d.adopted_container).await?;
+    }
+    Ok(())
+}
+
+/// Parses `KEY=value` lines into container labels.
+fn parse_labels(s: &str) -> HashMap<String, String> {
+    lines(s)
+        .filter_map(|l| l.split_once('=').map(|(k, v)| (k.trim().to_string(), v.to_string())))
+        .filter(|(k, _)| !k.is_empty())
+        .collect()
+}
+
 /// (Re)creates the deployment's container from `image`, pulling it first
 /// when `pull_first` is set.
 async fn deploy(docker: &Docker, log: &UpdateLog, d: &Deployment, image: &str, pull_first: bool) -> anyhow::Result<()> {
@@ -634,7 +693,7 @@ async fn deploy(docker: &Docker, log: &UpdateLog, d: &Deployment, image: &str, p
             return Err(e);
         }
     }
-    destroy(docker, log, &d.name).await?;
+    destroy_all(docker, log, d).await?;
 
     let (exposed, bindings) = parse_ports(&d.ports).map_err(|e| anyhow::anyhow!(e.message))?;
     let env = lines(&d.env).map(str::to_string).collect::<Vec<_>>();
@@ -647,7 +706,11 @@ async fn deploy(docker: &Docker, log: &UpdateLog, d: &Deployment, image: &str, p
         env: (!env.is_empty()).then_some(env),
         cmd: (!cmd.is_empty()).then_some(cmd),
         exposed_ports: (!exposed.is_empty()).then_some(exposed),
-        labels: Some(HashMap::from([(LABEL.to_string(), d.name.clone())])),
+        labels: Some({
+            let mut labels = parse_labels(&d.labels);
+            labels.insert(LABEL.to_string(), d.name.clone());
+            labels
+        }),
         host_config: Some(HostConfig {
             port_bindings: (!bindings.is_empty()).then_some(bindings),
             binds: (!binds.is_empty()).then_some(binds),
@@ -680,7 +743,7 @@ async fn deploy(docker: &Docker, log: &UpdateLog, d: &Deployment, image: &str, p
     Ok(())
 }
 
-fn system_user(name: &str) -> User {
+pub fn system_user(name: &str) -> User {
     User {
         id: 0,
         username: name.to_string(),
@@ -720,43 +783,21 @@ async fn github_webhook(
     // An unknown name looks the same as a bad signature, so deployment names
     // can't be probed without the secret.
     let d = fetch(&state, &name).await.map_err(|_| unauthorized())?;
-    let signature = headers
-        .get("x-hub-signature-256")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    if d.webhook_secret.is_empty() || !git::verify_signature(&d.webhook_secret, &body, signature) {
-        return Err(unauthorized());
-    }
-    let event = headers
-        .get("x-github-event")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    let ignored = |reason: &str| Ok((StatusCode::ACCEPTED, Json(json!({ "ignored": reason }))));
-    match event {
-        "ping" => return Ok((StatusCode::OK, Json(json!({ "ok": true })))),
-        "push" => {}
-        other => return ignored(&format!("event '{other}' is not handled")),
-    }
+    let push = git::parse_push(&headers, &body, &d.webhook_secret, &d.git_branch, d.auto_deploy && d.source == "git", &d.last_seen_commit)
+        .map_err(|_| unauthorized())?;
+    webhook_response(match push {
+        git::Push::Deploy(sha) => git::Push::Deploy(deploy_commit(&state, d, &sha, "github").await?.id.to_string()),
+        other => other,
+    })
+}
 
-    let payload: Value = serde_json::from_slice(&body).map_err(|e| AppError::bad_request(format!("invalid payload: {e}")))?;
-    if d.source != "git" {
-        return ignored("deployment is not built from git");
-    }
-    if payload["ref"].as_str() != Some(&format!("refs/heads/{}", d.git_branch)) {
-        return ignored("push is not to the deployed branch");
-    }
-    if !d.auto_deploy {
-        return ignored("auto-deploy is disabled");
-    }
-    let sha = payload["after"].as_str().unwrap_or_default().to_string();
-    if sha.is_empty() || sha.chars().all(|c| c == '0') {
-        return ignored("branch was deleted");
-    }
-    if sha == d.last_seen_commit {
-        return ignored("commit already deployed");
-    }
-    let update = deploy_commit(&state, d, &sha, "github").await?;
-    Ok((StatusCode::OK, Json(json!({ "update_id": update.id }))))
+/// Turns a webhook outcome into its HTTP response (`Deploy` carries the update id).
+pub fn webhook_response(push: git::Push) -> AppResult<(StatusCode, Json<Value>)> {
+    Ok(match push {
+        git::Push::Ping => (StatusCode::OK, Json(json!({ "ok": true }))),
+        git::Push::Ignored(reason) => (StatusCode::ACCEPTED, Json(json!({ "ignored": reason }))),
+        git::Push::Deploy(id) => (StatusCode::OK, Json(json!({ "update_id": id.parse::<i64>().unwrap_or_default() }))),
+    })
 }
 
 /// Polls auto-deploy repositories for new commits, so pushes deploy even when
@@ -783,6 +824,7 @@ pub fn spawn_poller(state: AppState) {
                     tracing::warn!("auto-deploy check failed: {e:#}");
                 }
             }
+            crate::stacks::poll(&state).await;
         }
     });
 }

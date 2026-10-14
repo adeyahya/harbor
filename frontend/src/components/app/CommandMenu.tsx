@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Box, Boxes, Container, HardDrive, LayoutGrid, Layers, Moon, Network, Plus, Sun } from 'lucide-react'
+import { Activity, Box, Boxes, Container, HardDrive, LayoutGrid, Layers, Moon, Network, PackageOpen, Plus, Sun } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
@@ -18,6 +18,7 @@ const pages = [
   { to: '/volumes', label: 'Volumes', icon: HardDrive },
   { to: '/networks', label: 'Networks', icon: Network },
   { to: '/activity', label: 'Activity', icon: Activity },
+  { to: '/import', label: 'Import existing containers', icon: PackageOpen },
 ]
 
 export function CommandMenuProvider({ children }: { children: ReactNode }) {

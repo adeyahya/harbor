@@ -12,6 +12,7 @@ import { CanvasPage } from '@/pages/Canvas'
 import { ContainerPanel, ContainersPage } from '@/pages/Containers'
 import { DeploymentPanel } from '@/pages/DeploymentPanel'
 import { LoginPage } from '@/pages/Login'
+import { ImportPage } from '@/pages/Import'
 import { ImagesPage, NetworksPage, VolumesPage } from '@/pages/Resources'
 import { StackPanel } from '@/pages/StackPanel'
 
@@ -50,6 +51,7 @@ export default function App() {
               <Route path="volumes" element={<VolumesPage />} />
               <Route path="networks" element={<NetworksPage />} />
               <Route path="activity" element={<ActivityPage />} />
+              <Route path="import" element={<ImportPage />} />
               <Route path="updates" element={<Navigate to="/activity" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

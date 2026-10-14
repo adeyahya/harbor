@@ -10,9 +10,11 @@ design, compiled into the backend binary.
 - **Canvas**: every stack and deployment as a card with live status, services
   and published ports, plus host CPU/memory/disk. Clicking a card opens its
   panel with Deployments, Logs, Variables and Settings tabs. Press ⌘K to search.
-- **Stacks**: Docker Compose projects. Edit `compose.yaml` and `.env` in the UI, then
-  deploy, pull, restart, stop or take them down. Files are written to
-  `data/stacks/<name>/` and run with `docker compose`.
+- **Stacks**: Docker Compose projects. The compose file is either edited in the
+  UI or comes from a **git repository** (with auto-deploy on push, like
+  deployments). Variables are written to a `.env` file; deploy, pull, restart,
+  stop or take them down. Stacks can run from a chosen project directory so
+  relative paths in the compose file keep working.
 - **Deployments**: single containers with ports, volumes, environment,
   network, restart policy and command. The image comes from either:
   - a **registry image**, pulled on each deploy, or
@@ -31,6 +33,9 @@ design, compiled into the backend binary.
   no rebuild or pull. Stacks roll back their compose file and variables.
 - **Containers**: list, start/stop/restart/remove, live log streaming, inspect.
 - **Images, volumes, networks**: list, remove, prune.
+- **Import existing containers** (e.g. from Komodo): compose projects become
+  stacks and standalone containers become deployments, without restarting
+  anything. See [Moving from Komodo](#moving-from-komodo).
 - **Activity**: every action is recorded with its status and full output, and
   streamed live while it runs.
 - **Auth**: the first visit creates an admin account. Sessions use an httpOnly cookie.
@@ -177,6 +182,43 @@ Then open http://localhost:5173.
 | `HARBOR_GIT_POLL_SECS` | `60`        | How often auto-deploy checks branches for new commits. `0` disables polling. |
 | `RUST_LOG`        | `harbor=info`    | Log filter.                                  |
 
+## Moving from Komodo
+
+Harbor can take over containers that Komodo (or anything else) started on the
+same Docker engine. Open **Import** (the banner on the canvas, *Create → Import
+existing containers*, or ⌘K):
+
+- **Komodo stacks** (compose projects) import as stacks. Harbor reads the
+  compose file and `.env` from the project's directory and keeps running the
+  stack from that directory, so relative paths behave as before. If the
+  directory is a git checkout (Komodo's git-backed stacks), Harbor offers to use
+  the repository: deploys then fetch the branch into that checkout and reset to
+  it. Local edits to tracked files are discarded; untracked files such as data
+  folders are kept.
+- **Komodo deployments** (single containers) import as deployments. Harbor
+  derives image, ports, volumes, variables (without the image's defaults),
+  labels, network and restart policy from the running container, and lists
+  anything it can't carry over yet (capabilities, devices, resource limits,
+  custom entrypoint, …) before you confirm. Afterwards you can switch the
+  source to a GitHub repository in Settings.
+
+Importing never restarts anything. The containers keep running until you
+deploy from Harbor, which recreates them with Harbor's settings (an imported
+deployment is renamed to its Harbor name at that point). Komodo's own
+containers are flagged and not counted.
+
+Before importing, **stop Komodo from managing those services** (remove them from
+Komodo, or stop Komodo's Periphery agent), otherwise both tools will redeploy
+them. Your data in named volumes is untouched by either.
+
+If Harbor runs in Docker, mount Komodo's directory at the same path so Harbor
+can read the compose files and run the stacks from there:
+
+```yaml
+volumes:
+  - /etc/komodo:/etc/komodo
+```
+
 ## Deploying from GitHub
 
 1. **Create → GitHub repo**, enter `owner/repo` (leave the branch empty to use
@@ -218,6 +260,7 @@ backend/
     git.rs         clone, docker build, remote head lookup, webhook signatures
     process.rs     runs git/docker commands with output streamed to updates
     ports.rs       host port availability and suggestions
+    import.rs      discovering and importing containers Harbor didn't create
     docker.rs      containers, logs (SSE), images, volumes, networks
     system.rs      host stats collector
     assets.rs      embedded frontend

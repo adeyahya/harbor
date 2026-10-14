@@ -1,6 +1,6 @@
-import { Box, Check, Copy, Eye, EyeOff, KeyRound, X } from 'lucide-react'
+import { Box, Check, Copy, Eye, EyeOff, FileCode2, KeyRound, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { repoLabel, type Deployment, type DeploymentSource } from '@/api'
+import { repoLabel, type Deployment, type DeploymentSource, type Stack, type StackSource } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -45,6 +45,56 @@ function CopyField({ value, secret = false }: { value: string; secret?: boolean 
   )
 }
 
+/** Access token input that never shows a saved token: set / replace / remove. */
+function TokenField({ hasToken, token, onTokenChange }: { hasToken: boolean; token: string | null; onTokenChange: (t: string | null) => void }) {
+  const [replacing, setReplacing] = useState(false)
+  const tokenState = token === '' ? 'cleared' : hasToken && token === null && !replacing ? 'set' : 'input'
+  return (
+          <Field
+      label="Access token"
+      hint={
+        <>
+          Needed for private repos: a GitHub fine-grained token with read access to contents. It's stored on the server and never shown again.
+        </>
+      }
+      htmlFor="src-token"
+    >
+      {tokenState === 'set' ? (
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border bg-muted/40 px-3 text-sm text-muted-foreground">
+            <KeyRound className="size-3.5 text-success" /> Token saved
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={() => setReplacing(true)}>
+            Replace
+          </Button>
+          <Button type="button" variant="ghost" size="sm" className="text-destructive" onClick={() => onTokenChange('')}>
+            <X /> Remove
+          </Button>
+        </div>
+      ) : tokenState === 'cleared' ? (
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 flex-1 items-center rounded-lg border border-dashed px-3 text-sm text-muted-foreground">Token will be removed on save</div>
+          <Button type="button" variant="ghost" size="sm" onClick={() => onTokenChange(null)}>
+            Undo
+          </Button>
+        </div>
+      ) : (
+        <Input
+          id="src-token"
+          type="password"
+          autoComplete="off"
+          value={token ?? ''}
+          // An empty field means "no change"; removing uses the Remove button.
+          onChange={(e) => onTokenChange(e.target.value === '' ? null : e.target.value)}
+          placeholder={hasToken ? 'Paste the new token' : 'Optional, for private repositories'}
+          className="font-mono"
+          autoFocus={replacing}
+        />
+      )}
+    </Field>
+  )
+}
+
 /** Image vs. repository picker plus the fields for each. */
 export function SourceSettings({
   config,
@@ -64,8 +114,6 @@ export function SourceSettings({
     { id: 'git', icon: <GithubIcon />, label: 'Git repository', body: 'Build from a Dockerfile' },
     { id: 'image', icon: <Box className="size-4" />, label: 'Docker image', body: 'Pull from a registry' },
   ]
-  const [replacing, setReplacing] = useState(false)
-  const tokenState = token === '' ? 'cleared' : hasToken && token === null && !replacing ? 'set' : 'input'
 
   return (
     <SettingsSection title="Source" description="Where this service's image comes from.">
@@ -114,48 +162,7 @@ export function SourceSettings({
           <Field label="Build arguments" hint={<>One <code>KEY=value</code> per line, passed as <code>--build-arg</code>.</>} htmlFor="src-args">
             <Textarea id="src-args" value={config.build_args} onChange={(e) => set('build_args')(e.target.value)} rows={3} placeholder="NODE_ENV=production" className="font-mono text-[12.5px]" />
           </Field>
-          <Field
-            label="Access token"
-            hint={
-              <>
-                Needed for private repos: a GitHub fine-grained token with read access to contents. It's stored on the server and never shown again.
-              </>
-            }
-            htmlFor="src-token"
-          >
-            {tokenState === 'set' ? (
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border bg-muted/40 px-3 text-sm text-muted-foreground">
-                  <KeyRound className="size-3.5 text-success" /> Token saved
-                </div>
-                <Button type="button" variant="outline" size="sm" onClick={() => setReplacing(true)}>
-                  Replace
-                </Button>
-                <Button type="button" variant="ghost" size="sm" className="text-destructive" onClick={() => onTokenChange('')}>
-                  <X /> Remove
-                </Button>
-              </div>
-            ) : tokenState === 'cleared' ? (
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 flex-1 items-center rounded-lg border border-dashed px-3 text-sm text-muted-foreground">Token will be removed on save</div>
-                <Button type="button" variant="ghost" size="sm" onClick={() => onTokenChange(null)}>
-                  Undo
-                </Button>
-              </div>
-            ) : (
-              <Input
-                id="src-token"
-                type="password"
-                autoComplete="off"
-                value={token ?? ''}
-                // An empty field means "no change"; removing uses the Remove button.
-                onChange={(e) => onTokenChange(e.target.value === '' ? null : e.target.value)}
-                placeholder={hasToken ? 'Paste the new token' : 'Optional, for private repositories'}
-                className="font-mono"
-                autoFocus={replacing}
-              />
-            )}
-          </Field>
+          <TokenField hasToken={hasToken} token={token} onTokenChange={onTokenChange} />
         </div>
       )}
     </SettingsSection>
@@ -163,19 +170,33 @@ export function SourceSettings({
 }
 
 /** Auto-deploy toggle with the GitHub webhook details. */
-export function AutoDeploySettings({ name, config, set, secret }: { name: string; config: SourceConfig; set: SourceSettingsSet; secret: string }) {
-  const url = `${window.location.origin}/api/webhooks/github/${name}`
+export function AutoDeploySettings({
+  webhookPath,
+  repo,
+  branch,
+  enabled,
+  onEnabledChange,
+  secret,
+}: {
+  webhookPath: string
+  repo: string
+  branch: string
+  enabled: boolean
+  onEnabledChange: (v: boolean) => void
+  secret: string
+}) {
+  const url = `${window.location.origin}${webhookPath}`
   const local = /^(localhost|127\.|\[::1\])/.test(window.location.hostname)
   return (
-    <SettingsSection title="Deploy on push" description={`Rebuild and redeploy when ${repoLabel(config.git_url) || 'the repo'} gets new commits on ${config.git_branch || 'the branch'}.`}>
+    <SettingsSection title="Deploy on push" description={`Redeploy when ${repoLabel(repo) || 'the repo'} gets new commits on ${branch || 'its default branch'}.`}>
       <label className="flex cursor-pointer items-start justify-between gap-4">
         <span>
           <span className="block text-sm font-medium">Auto-deploy</span>
           <span className="block text-xs text-muted-foreground">Harbor checks the branch for new commits about once a minute. Add the webhook below for instant deploys.</span>
         </span>
-        <Switch checked={config.auto_deploy} onCheckedChange={(v) => set('auto_deploy')(v)} />
+        <Switch checked={enabled} onCheckedChange={onEnabledChange} />
       </label>
-      {config.auto_deploy && (
+      {enabled && (
         <div className="mt-4 space-y-3 border-t pt-4">
           <p className="text-sm">
             <span className="font-medium">GitHub webhook</span>{' '}
@@ -190,6 +211,80 @@ export function AutoDeploySettings({ name, config, set, secret }: { name: string
           </Field>
         </div>
       )}
+    </SettingsSection>
+  )
+}
+
+export type StackSourceConfig = Pick<Stack, 'source' | 'git_url' | 'git_branch' | 'compose_path' | 'project_dir'>
+
+/** Inline compose vs. git repository for a stack, plus its project directory. */
+export function StackSourceSettings({
+  config,
+  set,
+  hasToken,
+  token,
+  onTokenChange,
+}: {
+  config: StackSourceConfig
+  set: <K extends keyof StackSourceConfig>(k: K) => (v: StackSourceConfig[K]) => void
+  hasToken: boolean
+  token: string | null
+  onTokenChange: (t: string | null) => void
+}) {
+  const options: { id: StackSource; icon: ReactNode; label: string; body: string }[] = [
+    { id: 'git', icon: <GithubIcon />, label: 'Git repository', body: 'Compose file from a repo' },
+    { id: 'inline', icon: <FileCode2 className="size-4" />, label: 'Edited in Harbor', body: 'Compose file stored here' },
+  ]
+  return (
+    <SettingsSection title="Source" description="Where this stack's compose file comes from.">
+      <div className="mb-4 grid gap-2 sm:grid-cols-2">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => set('source')(o.id)}
+            className={cn(
+              'flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors',
+              config.source === o.id ? 'border-brand/60 bg-brand/10 ring-3 ring-brand/15' : 'hover:bg-accent/50',
+            )}
+          >
+            <span className={cn('flex size-8 items-center justify-center rounded-md border bg-card', config.source === o.id && 'text-brand')}>{o.icon}</span>
+            <span>
+              <span className="block text-sm font-medium">{o.label}</span>
+              <span className="block text-xs text-muted-foreground">{o.body}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="space-y-4">
+        {config.source === 'git' && (
+          <>
+            <div className="grid gap-4 sm:grid-cols-[1fr_12rem]">
+              <Field label="Repository" hint="owner/repo for GitHub, or any git URL." htmlFor="st-repo">
+                <Input id="st-repo" value={config.git_url} onChange={(e) => set('git_url')(e.target.value)} placeholder="owner/repo" className="font-mono" />
+              </Field>
+              <Field label="Branch" htmlFor="st-branch">
+                <Input id="st-branch" value={config.git_branch} onChange={(e) => set('git_branch')(e.target.value)} placeholder="Default branch" className="font-mono" />
+              </Field>
+            </div>
+            <Field label="Compose file" hint="Path inside the repository. Relative paths in it resolve against its folder." htmlFor="st-path">
+              <Input id="st-path" value={config.compose_path} onChange={(e) => set('compose_path')(e.target.value)} placeholder="compose.yaml" className="font-mono" />
+            </Field>
+            <TokenField hasToken={hasToken} token={token} onTokenChange={onTokenChange} />
+          </>
+        )}
+        <Field
+          label={config.source === 'git' ? 'Checkout directory' : 'Project directory'}
+          hint={
+            config.source === 'git'
+              ? 'Where the repository is checked out on the host. Empty uses Harbor\'s data folder. Deploys update it in place: local edits to tracked files are discarded, other files (like data folders) are kept.'
+              : 'Relative paths in the compose file resolve against this directory. Empty uses Harbor\'s data folder. Imported stacks keep their original directory.'
+          }
+          htmlFor="st-dir"
+        >
+          <Input id="st-dir" value={config.project_dir} onChange={(e) => set('project_dir')(e.target.value)} placeholder="(Harbor's data folder)" className="font-mono" />
+        </Field>
+      </div>
     </SettingsSection>
   )
 }

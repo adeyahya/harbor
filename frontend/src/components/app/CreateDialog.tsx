@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Box, Layers } from 'lucide-react'
+import { ArrowLeft, Box, Layers, PackageOpen } from 'lucide-react'
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { api } from '@/api'
@@ -36,14 +36,15 @@ export function CreateProvider({ children }: { children: ReactNode }) {
       {children}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md">
-          {kind ? <CreateForm kind={kind} onBack={() => setKind(null)} onDone={() => setOpen(false)} /> : <KindPicker onPick={setKind} />}
+          {kind ? <CreateForm kind={kind} onBack={() => setKind(null)} onDone={() => setOpen(false)} /> : <KindPicker onPick={setKind} onImport={() => setOpen(false)} />}
         </DialogContent>
       </Dialog>
     </CreateContext.Provider>
   )
 }
 
-function KindPicker({ onPick }: { onPick: (k: Kind) => void }) {
+function KindPicker({ onPick, onImport }: { onPick: (k: Kind) => void; onImport: () => void }) {
+  const navigate = useNavigate()
   const options = [
     { kind: 'repo' as const, icon: <GithubIcon className="size-4.5" />, title: 'GitHub repo', body: 'Build a Dockerfile from a repository and redeploy on push.' },
     { kind: 'image' as const, icon: <Box className="size-4.5" />, title: 'Docker image', body: 'Run a single container from a registry image.' },
@@ -67,6 +68,21 @@ function KindPicker({ onPick }: { onPick: (k: Kind) => void }) {
             </div>
           </button>
         ))}
+        <button
+          onClick={() => {
+            onImport()
+            navigate('/import')
+          }}
+          className="flex w-full items-center gap-3 rounded-lg border-t px-3 py-3 text-left transition-colors hover:bg-accent"
+        >
+          <div className="flex size-9 items-center justify-center rounded-lg border bg-muted text-brand">
+            <PackageOpen className="size-4.5" />
+          </div>
+          <div>
+            <div className="text-sm font-medium">Import existing containers</div>
+            <div className="text-xs text-muted-foreground">Take over containers already running here, e.g. from Komodo.</div>
+          </div>
+        </button>
       </div>
     </>
   )

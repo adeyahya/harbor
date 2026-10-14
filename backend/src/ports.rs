@@ -57,6 +57,20 @@ async fn published(state: &AppState, owner: Option<&str>) -> HashMap<(u16, Strin
         Some(("stack", name)) => ("com.docker.compose.project", name),
         _ => ("", ""),
     };
+    // A deployment also owns a container named after it, or one it adopted on
+    // import (neither carries Harbor's label yet).
+    let mut owner_names: Vec<String> = Vec::new();
+    if owner_label == "harbor.deployment" {
+        owner_names.push(owner_value.to_string());
+        if let Ok(Some(adopted)) = sqlx::query_scalar::<_, String>("SELECT adopted_container FROM deployments WHERE name = ?")
+            .bind(owner_value)
+            .fetch_optional(&state.db)
+            .await
+            && !adopted.is_empty()
+        {
+            owner_names.push(adopted);
+        }
+    }
     let containers = state
         .docker
         .list_containers(Some(ListContainersOptions::default()))
@@ -70,8 +84,9 @@ async fn published(state: &AppState, owner: Option<&str>) -> HashMap<(u16, Strin
             .and_then(|n| n.first())
             .map(|n| n.trim_start_matches('/').to_string())
             .unwrap_or_default();
-        let owned = !owner_label.is_empty()
-            && c.labels.as_ref().and_then(|l| l.get(owner_label)).is_some_and(|v| v == owner_value);
+        let owned = (!owner_label.is_empty()
+            && c.labels.as_ref().and_then(|l| l.get(owner_label)).is_some_and(|v| v == owner_value))
+            || owner_names.contains(&name);
         for p in c.ports.unwrap_or_default() {
             if let Some(public) = p.public_port {
                 let proto = match p.typ {

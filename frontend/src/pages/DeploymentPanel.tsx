@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownToLine, Box, GitBranch, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
+import { ArrowDownToLine, Box, GitBranch, Info, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -39,6 +39,7 @@ const FIELDS = [
   'dockerfile',
   'build_args',
   'auto_deploy',
+  'labels',
 ] as const satisfies readonly (keyof Deployment)[]
 type Config = Pick<Deployment, (typeof FIELDS)[number]>
 const SETTINGS_FIELDS: (keyof Config)[] = FIELDS.filter((f) => f !== 'env')
@@ -206,6 +207,15 @@ function DeploymentPanelInner({ name }: { name: string }) {
       }
       footer={<ChangesBar count={changed.length} saving={save.isPending} onDiscard={() => setDraft({})} onSave={() => save.mutate()} onDeploy={() => action('deploy')} />}
     >
+      {data.adopted_container && (
+        <div className="mb-4 flex gap-2 rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-sm">
+          <Info className="mt-0.5 size-4 shrink-0 text-brand" />
+          <span>
+            Imported from the container <code className="font-mono text-xs">{data.adopted_container}</code>, which is still running unchanged. The next deploy replaces it with
+            a container Harbor manages{data.adopted_container !== data.name ? <> named <code className="font-mono text-xs">{data.name}</code></> : null}.
+          </span>
+        </div>
+      )}
       {drift && (
         <div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           Running <code className="font-mono text-xs">{data.container!.Config.Image}</code>. Redeploy to apply the saved image.
@@ -228,7 +238,16 @@ function DeploymentPanelInner({ name }: { name: string }) {
       {tab === 'settings' && (
         <div className="space-y-5">
           <SourceSettings key={data.updated_at} config={config} set={setSource} hasToken={data.has_token} token={token} onTokenChange={setToken} />
-          {config.source === 'git' && <AutoDeploySettings name={data.name} config={config} set={setSource} secret={data.webhook_secret} />}
+          {config.source === 'git' && (
+            <AutoDeploySettings
+              webhookPath={`/api/webhooks/github/${data.name}`}
+              repo={config.git_url}
+              branch={config.git_branch}
+              enabled={config.auto_deploy}
+              onEnabledChange={set('auto_deploy')}
+              secret={data.webhook_secret}
+            />
+          )}
           <SettingsSection title="Networking" description="Publish container ports on this host. Taken ports are flagged as you type.">
             <div className="space-y-4">
               <PortsEditor value={config.ports} onChange={set('ports')} owner={`deployment:${data.name}`} image={data.image} />
@@ -236,6 +255,9 @@ function DeploymentPanelInner({ name }: { name: string }) {
                 <Input value={config.network} onChange={(e) => set('network')(e.target.value)} placeholder="bridge" className="font-mono sm:w-72" />
               </Field>
             </div>
+          </SettingsSection>
+          <SettingsSection title="Labels" description="Container labels, e.g. Traefik routing rules. Applied on the next deploy.">
+            <VariablesEditor value={config.labels} onChange={set('labels')} secret={false} keyPlaceholder="traefik.enable" noun="label" />
           </SettingsSection>
           <SettingsSection title="Volumes" description="Mount host paths or named volumes into the container.">
             <Textarea value={config.volumes} onChange={(e) => set('volumes')(e.target.value)} rows={3} placeholder={'app-data:/data\n/srv/config:/config:ro'} className="font-mono text-[12.5px]" />

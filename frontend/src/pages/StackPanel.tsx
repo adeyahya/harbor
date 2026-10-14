@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownToLine, Layers, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
+import { ArrowDownToLine, GitBranch, Layers, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { api, type Stack, type StackDetail } from '@/api'
+import { api, repoLabel, type Stack, type StackDetail } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { ContainersTable } from '@/components/app/containers'
 import { LogViewer } from '@/components/app/LogViewer'
+import { GithubIcon } from '@/components/app/GithubIcon'
 import { EmptyState, ErrorAlert, Loading } from '@/components/app/page'
+import { AutoDeploySettings, StackSourceSettings, type StackSourceConfig } from '@/components/app/SourceSettings'
 import { ChangesBar, CodeEditor, ServicePanel, SettingsSection, usePanelTab, VariablesEditor } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
 import { DeploymentHistory, useRunAction } from '@/components/app/updates'
@@ -17,6 +19,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { containerName, timeAgo } from '@/lib/format'
 
 const TABS = ['deployments', 'services', 'logs', 'variables', 'settings'] as const
+
+const FIELDS = ['compose', 'env', 'source', 'git_url', 'git_branch', 'compose_path', 'project_dir', 'auto_deploy'] as const satisfies readonly (keyof Stack)[]
+type Config = Pick<Stack, (typeof FIELDS)[number]>
+const pick = (s: Stack) => Object.fromEntries(FIELDS.map((f) => [f, s[f]])) as Config
 
 export function StackPanel() {
   const { name = '' } = useParams()
@@ -35,19 +41,29 @@ function StackPanelInner({ name }: { name: string }) {
     refetchInterval: 4000,
   })
 
-  // Staged edits; null means unchanged from the server.
-  const [compose, setCompose] = useState<string | null>(null)
-  const [env, setEnv] = useState<string | null>(null)
-  const changes = (compose !== null && compose !== data?.compose ? 1 : 0) + (env !== null && env !== data?.env ? 1 : 0)
+  // Staged edits on top of the saved stack; the token is tri-state like deployments'.
+  const [draft, setDraft] = useState<Partial<Config>>({})
+  const [token, setToken] = useState<string | null>(null)
+  const config: Config | null = data ? { ...pick(data), ...draft } : null
+  const changed: string[] = data ? FIELDS.filter((f) => draft[f] !== undefined && draft[f] !== data[f]) : []
+  if (token !== null) changed.push('git_token')
+  const changes = changed.length
+  const set =
+    <K extends keyof Config>(k: K) =>
+    (v: Config[K]) =>
+      setDraft((d) => ({ ...d, [k]: v }))
+  const setSource = set as <K extends keyof StackSourceConfig>(k: K) => (v: StackSourceConfig[K]) => void
+  const setCompose = set('compose')
+  const setEnv = set('env')
   const [confirm, setConfirm] = useState<'down' | 'delete' | null>(null)
   const [logContainer, setLogContainer] = useState('')
 
   const save = useMutation({
-    mutationFn: () => api.put<Stack>(`/stacks/${name}`, { compose: compose ?? data!.compose, env: env ?? data!.env }),
+    mutationFn: () => api.put<Stack>(`/stacks/${name}`, { ...config, git_token: token ?? undefined }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['stack', name] })
-      setCompose(null)
-      setEnv(null)
+      setDraft({})
+      setToken(null)
       toast.success('Changes saved')
     },
     onError: (e) => toast.error(e.message),
@@ -74,19 +90,32 @@ function StackPanelInner({ name }: { name: string }) {
     </ServicePanel>
   )
   if (isLoading) return shell(<Loading />)
-  if (!data) return shell(<ErrorAlert error={error ?? 'Stack not found'} />)
+  if (!data || !config) return shell(<ErrorAlert error={error ?? 'Stack not found'} />)
+  const git = data.source === 'git'
+  const dot = (fields: string[]) => (fields.some((f) => changed.includes(f)) ? ' •' : '')
+  const compose = draft.compose ?? null
+  const env = draft.env ?? null
 
   const up = data.status !== 'down'
   const selectedLog = data.containers.find((c) => c.Id === logContainer) ?? data.containers[0]
 
   return (
     <ServicePanel
-      icon={<Layers />}
+      icon={git ? <GithubIcon /> : <Layers />}
       title={data.name}
       subtitle={
         <>
           <Status status={data.status} />
-          <span>Compose stack</span>
+          {git ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-xs">
+              <span className="truncate font-medium text-foreground/90">{repoLabel(data.git_url)}</span>
+              <GitBranch className="size-3 shrink-0" />
+              <span className="font-mono">{data.git_branch}</span>
+              {data.last_commit && <span className="font-mono text-brand">{data.last_commit.slice(0, 7)}</span>}
+            </span>
+          ) : (
+            <span>Compose stack</span>
+          )}
           <span>
             {data.containers.length} service{data.containers.length === 1 ? '' : 's'}
           </span>
@@ -97,8 +126,8 @@ function StackPanelInner({ name }: { name: string }) {
         { id: 'deployments', label: 'Deployments' },
         { id: 'services', label: `Services${data.containers.length ? ` · ${data.containers.length}` : ''}` },
         { id: 'logs', label: 'Logs' },
-        { id: 'variables', label: env !== null && env !== data.env ? 'Variables •' : 'Variables' },
-        { id: 'settings', label: compose !== null && compose !== data.compose ? 'Settings •' : 'Settings' },
+        { id: 'variables', label: `Variables${dot(['env'])}` },
+        { id: 'settings', label: `Settings${dot(['compose', 'source', 'git_url', 'git_branch', 'compose_path', 'project_dir', 'auto_deploy', 'git_token'])}` },
       ]}
       tab={tab}
       onTabChange={setTab}
@@ -153,7 +182,7 @@ function StackPanelInner({ name }: { name: string }) {
         <ChangesBar
           count={changes}
           saving={save.isPending}
-          onDiscard={() => (setCompose(null), setEnv(null))}
+          onDiscard={() => (setDraft({}), setToken(null))}
           onSave={() => save.mutate()}
           onDeploy={() => action('deploy')}
         />
@@ -209,9 +238,21 @@ function StackPanelInner({ name }: { name: string }) {
 
       {tab === 'settings' && (
         <div className="space-y-5">
-          <SettingsSection title="Compose file" description="The compose.yaml for this stack. ⌘S saves, Tab indents.">
-            <CodeEditor value={compose ?? data.compose} onChange={setCompose} onSave={() => changes && save.mutate()} />
-          </SettingsSection>
+          <StackSourceSettings key={data.updated_at} config={config} set={setSource} hasToken={data.has_token} token={token} onTokenChange={setToken} />
+          {config.source === 'git' ? (
+            <AutoDeploySettings
+              webhookPath={`/api/webhooks/github/stacks/${data.name}`}
+              repo={config.git_url}
+              branch={config.git_branch}
+              enabled={config.auto_deploy}
+              onEnabledChange={set('auto_deploy')}
+              secret={data.webhook_secret}
+            />
+          ) : (
+            <SettingsSection title="Compose file" description="The compose.yaml for this stack. ⌘S saves, Tab indents.">
+              <CodeEditor value={compose ?? data.compose} onChange={setCompose} onSave={() => changes && save.mutate()} />
+            </SettingsSection>
+          )}
           <SettingsSection title="Danger zone" description="Deleting removes the stack from Harbor. Take it down first to stop its containers." danger>
             <div className="flex flex-wrap gap-2">
               <Button variant="destructive" size="sm" disabled={!up} onClick={() => setConfirm('down')}>

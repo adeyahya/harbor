@@ -1,0 +1,19 @@
+# Runs Harbor itself. See "Running Harbor in Docker" in the README.
+services:
+  harbor:
+    build: .
+    image: harbor:latest
+    container_name: harbor
+    restart: unless-stopped
+    # Shown as the server name in Harbor; otherwise it's the container ID.
+    hostname: my-server
+    ports:
+      - "9120:9120"
+    volumes:
+      # Harbor manages the host's Docker engine through its socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Must be the SAME path on both sides: compose files in stacks are run
+      # by the host's Docker, which resolves relative bind mounts on the host.
+      - /var/lib/harbor:/var/lib/harbor
+    environment:
+      HARBOR_DATA_DIR: /var/lib/harbor

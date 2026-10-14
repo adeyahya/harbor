@@ -40,8 +40,12 @@ procedures/actions, GitOps resource sync, alerting.
 
 ## Requirements
 
+To run Harbor in Docker you only need Docker itself (see
+[Running Harbor in Docker](#running-harbor-in-docker)). To build and run it
+directly on the host:
+
 - Rust (stable), Node 20+ and pnpm
-- Docker with the Compose plugin (`docker compose`)
+- Docker with the Compose plugin (`docker compose`), and `git`
 
 Harbor connects to the same engine as your `docker` CLI: `DOCKER_HOST` if set,
 otherwise the active `docker context` (for example Docker Desktop on macOS).
@@ -56,6 +60,97 @@ cd ../backend && cargo run --release
 ```
 
 Open http://127.0.0.1:9120 and create your admin account.
+
+## Running Harbor in Docker
+
+The repository ships a multi-stage `Dockerfile` (it builds the UI and the Rust
+binary, then copies them into a slim Debian image with `git` and the Docker CLI,
+Compose and Buildx) and a `compose.yaml` that runs it.
+
+```bash
+git clone <this repo> harbor && cd harbor
+sudo mkdir -p /var/lib/harbor
+docker compose up -d --build
+```
+
+Then open `http://<server>:9120` and create the admin account. Edit `hostname:`
+in `compose.yaml` first if you want the dashboard to show your server's name.
+
+### How it works and what it needs
+
+- **The Docker socket.** Harbor drives the *host's* Docker engine through
+  `/var/run/docker.sock`. Without that mount Harbor exits at startup with
+  `Socket not found: /var/run/docker.sock`. If your socket lives elsewhere
+  (rootless Docker, Podman), mount it and set `DOCKER_HOST=unix:///path/to/socket`.
+- **The data directory at the same path on both sides.** Stacks run with
+  `docker compose` inside Harbor's container, but the host's Docker resolves
+  bind-mount paths, and it resolves them **on the host**. A stack's
+  `./config:/config` becomes `<data dir>/stacks/<name>/config`, so that path has
+  to mean the same thing on the host and in the container:
+
+  ```yaml
+  volumes:
+    - /var/lib/harbor:/var/lib/harbor   # same path both sides
+  environment:
+    HARBOR_DATA_DIR: /var/lib/harbor
+  ```
+
+  To use another location, change all three to the same path. Don't use a named
+  volume here: Harbor would start, but relative bind mounts in stacks would
+  point at empty directories on the host.
+- **Runs as root.** Access to the Docker socket is root-equivalent on the host
+  anyway, so there's no meaningful privilege drop to make. Treat Harbor like
+  SSH access to the server: put it behind a reverse proxy with TLS, or keep it
+  on a private network or VPN.
+- **Harbor sees itself.** Its own container appears in the Containers list.
+  Stopping or removing it from the UI stops Harbor (`unless-stopped` won't bring
+  it back after a manual stop); start it again with `docker compose up -d`.
+
+### Host networking (Linux)
+
+With the default port mapping Harbor can only check Docker-published ports when
+it suggests free host ports; other processes on the host are invisible from the
+container's network. The host stats on the canvas are also the container's view
+(e.g. disk usage of the filesystem it sees). On a Linux server you can run with
+host networking for accurate port checks, and to bind to localhost behind a
+reverse proxy:
+
+```yaml
+services:
+  harbor:
+    network_mode: host        # replaces "ports:"
+    environment:
+      HARBOR_ADDR: 127.0.0.1:9120   # or 0.0.0.0:9120 to expose directly
+```
+
+Docker Desktop (macOS/Windows) handles host networking differently; keep the
+port mapping there.
+
+### Reverse proxy and webhooks
+
+Any reverse proxy works. Live logs stream over server-sent events, so turn off
+response buffering for Harbor. For example, with Caddy:
+
+```
+harbor.example.com {
+    reverse_proxy 127.0.0.1:9120 {
+        flush_interval -1
+    }
+}
+```
+
+GitHub webhooks then use `https://harbor.example.com/api/webhooks/github/<service>`.
+
+### Upgrading and backups
+
+```bash
+git pull && docker compose up -d --build
+```
+
+Database migrations run automatically at startup. Everything Harbor stores is
+in the data directory: back up `harbor.db` (stop Harbor first, or use
+`sqlite3 harbor.db ".backup backup.db"`) and the `stacks/` folder. Volumes and
+images used by your services live in Docker as usual.
 
 ## Development
 
@@ -76,8 +171,9 @@ Then open http://localhost:5173.
 
 | Variable          | Default          | Description                                  |
 | ----------------- | ---------------- | -------------------------------------------- |
-| `HARBOR_ADDR`     | `127.0.0.1:9120` | Listen address. Use `0.0.0.0:9120` to expose. |
-| `HARBOR_DATA_DIR` | `./data`         | SQLite database and stack files.             |
+| `HARBOR_ADDR`     | `127.0.0.1:9120` | Listen address. Use `0.0.0.0:9120` to expose (the Docker image does). |
+| `HARBOR_DATA_DIR` | `./data`         | SQLite database and stack files (`/var/lib/harbor` in the Docker image). |
+| `DOCKER_HOST`     | active context   | Docker engine to manage (`unix:///var/run/docker.sock` in the Docker image). |
 | `HARBOR_GIT_POLL_SECS` | `60`        | How often auto-deploy checks branches for new commits. `0` disables polling. |
 | `RUST_LOG`        | `harbor=info`    | Log filter.                                  |
 
@@ -109,6 +205,8 @@ expose it on a trusted network or behind a TLS reverse proxy.
 ## Layout
 
 ```
+Dockerfile         multi-stage image build (UI + binary + docker CLI and git)
+compose.yaml       runs Harbor itself in Docker
 backend/
   migrations/      SQLite schema (applied on startup)
   src/

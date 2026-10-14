@@ -1,0 +1,7 @@
+# Keep the build context small: build outputs and local state never belong in it.
+.git
+**/target
+**/node_modules
+frontend/dist
+data
+**/.DS_Store

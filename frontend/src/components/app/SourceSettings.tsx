@@ -1,4 +1,4 @@
-import { Box, Check, Copy, Eye, EyeOff, FileCode2, KeyRound, X } from 'lucide-react'
+import { Box, Check, ChevronsUp, Copy, Eye, EyeOff, FileCode2, KeyRound, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { gitHost, repoLabel, type Deployment, type DeploymentSource, type Stack, type StackSource } from '@/api'
@@ -12,10 +12,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { GithubIcon } from './GithubIcon'
 import { SettingsSection } from './panel'
+import { UpstreamField } from './promote'
 
 export type SourceConfig = Pick<
   Deployment,
-  'source' | 'image' | 'git_url' | 'git_branch' | 'build_context' | 'dockerfile' | 'build_args' | 'auto_deploy' | 'git_account_id'
+  'source' | 'image' | 'git_url' | 'git_branch' | 'build_context' | 'dockerfile' | 'build_args' | 'auto_deploy' | 'git_account_id' | 'upstream_id'
 >
 
 function Field({ label, hint, children, htmlFor }: { label: string; hint?: ReactNode; children: ReactNode; htmlFor?: string }) {
@@ -144,15 +145,18 @@ function AccountField({
   )
 }
 
-/** Image vs. repository picker plus the fields for each. */
+/** Image vs. repository vs. promote picker plus the fields for each. */
 export function SourceSettings({
   config,
   set,
   hasToken,
   token,
   onTokenChange,
+  selfId,
 }: {
   config: SourceConfig
+  /** The deployment being edited, which can't promote from itself. */
+  selfId?: number
   set: SourceSettingsSet
   hasToken: boolean
   /** null = unchanged, '' = clear, otherwise the new token. */
@@ -162,11 +166,12 @@ export function SourceSettings({
   const options: { id: DeploymentSource; icon: ReactNode; label: string; body: string }[] = [
     { id: 'git', icon: <GithubIcon />, label: 'Git repository', body: 'Build from a Dockerfile' },
     { id: 'image', icon: <Box className="size-4" />, label: 'Docker image', body: 'Pull from a registry' },
+    { id: 'promote', icon: <ChevronsUp className="size-4" />, label: 'Another deployment', body: 'Promote its tested images' },
   ]
 
   return (
     <SettingsSection title="Source" description="Where this service's image comes from.">
-      <div className="mb-4 grid gap-2 sm:grid-cols-2">
+      <div className="mb-4 grid gap-2 sm:grid-cols-3">
         {options.map((o) => (
           <button
             key={o.id}
@@ -186,7 +191,9 @@ export function SourceSettings({
         ))}
       </div>
 
-      {config.source === 'image' ? (
+      {config.source === 'promote' ? (
+        <UpstreamField selfId={selfId} value={config.upstream_id} onChange={set('upstream_id')} />
+      ) : config.source === 'image' ? (
         <Field label="Image" hint="Untagged images use :latest." htmlFor="src-image">
           <Input id="src-image" value={config.image} onChange={(e) => set('image')(e.target.value)} placeholder="nginx:alpine" className="font-mono" />
         </Field>

@@ -1,8 +1,10 @@
 //! Deployments are single containers. Their image either comes from a
-//! registry (pulled on deploy) or is built from a git repository's
-//! Dockerfile. Deploying (re)creates a container named after the deployment.
+//! registry (pulled on deploy), is built from a git repository's Dockerfile,
+//! or is promoted from another deployment (the exact image one of its deploys
+//! ran, e.g. staging → production). Deploying (re)creates a container named
+//! after the deployment.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future, pin::Pin};
 
 use axum::{
     Extension, Json, Router,
@@ -37,7 +39,8 @@ const LABEL: &str = "harbor.deployment";
 pub struct Deployment {
     pub id: i64,
     pub name: String,
-    /// For git deployments, the most recently built image tag.
+    /// For git deployments, the most recently built image tag; for promote
+    /// deployments, the artifact last promoted.
     pub image: String,
     pub ports: String,
     pub env: String,
@@ -47,7 +50,7 @@ pub struct Deployment {
     pub command: String,
     pub created_at: String,
     pub updated_at: String,
-    /// "image" or "git".
+    /// "image", "git" or "promote".
     pub source: String,
     pub git_url: String,
     pub git_branch: String,
@@ -71,6 +74,8 @@ pub struct Deployment {
     pub group_id: Option<i64>,
     /// Git account for the repository; None picks the one for its host.
     pub git_account_id: Option<i64>,
+    /// For promote deployments, the deployment whose deploys are promoted.
+    pub upstream_id: Option<i64>,
 }
 
 impl Deployment {
@@ -156,6 +161,8 @@ struct DeploymentInput {
     labels: String,
     #[serde(default)]
     git_account_id: Option<i64>,
+    #[serde(default)]
+    upstream_id: Option<i64>,
 }
 
 fn default_source() -> String {
@@ -179,6 +186,8 @@ struct DeploymentWithStatus {
     status: String,
     container_id: Option<String>,
     container_image: Option<String>,
+    /// Image the last successful deploy ran, so environments can be compared.
+    artifact: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -194,6 +203,8 @@ pub fn router() -> Router<AppState> {
         .route("/", get(list).post(create))
         .route("/{name}", get(detail).put(update).delete(remove))
         .route("/{name}/rollback/{update_id}", post(rollback))
+        .route("/{name}/promotable", get(promotable))
+        .route("/{name}/promote/{update_id}", post(promote_update))
         .route("/{name}/{action}", post(action))
 }
 
@@ -258,6 +269,18 @@ async fn list(State(state): State<AppState>) -> AppResult<Json<Vec<DeploymentWit
         .list_containers(Some(ListContainersOptions { all: true, ..Default::default() }))
         .await
         .unwrap_or_default();
+    let mut artifacts: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
+        "SELECT u.target_name, u.artifact FROM updates u JOIN (
+           SELECT MAX(id) AS id FROM updates
+           WHERE target_type = 'deployment' AND status = 'success'
+             AND operation IN ('deploy', 'rollback', 'promote') AND artifact != ''
+           GROUP BY target_name
+         ) latest ON u.id = latest.id",
+    )
+    .fetch_all(&state.db)
+    .await?
+    .into_iter()
+    .collect();
     let items = deployments
         .into_iter()
         .map(|deployment| {
@@ -276,6 +299,7 @@ async fn list(State(state): State<AppState>) -> AppResult<Json<Vec<DeploymentWit
                     .unwrap_or_else(|| "not_deployed".into()),
                 container_id: c.and_then(|c| c.id.clone()),
                 container_image: c.and_then(|c| c.image.clone()),
+                artifact: artifacts.remove(&deployment.name),
                 deployment,
             }
         })
@@ -324,11 +348,42 @@ fn validate(input: &mut DeploymentInput) -> AppResult<()> {
             git::validate_rel_path(&input.build_context, "root directory").map_err(AppError::bad_request)?;
             git::validate_rel_path(&input.dockerfile, "Dockerfile path").map_err(AppError::bad_request)?;
         }
+        "promote" => {
+            if input.upstream_id.is_none() {
+                return Err(AppError::bad_request("choose a deployment to promote from"));
+            }
+        }
         other => return Err(AppError::bad_request(format!("unknown source '{other}'"))),
+    }
+    if input.source != "promote" {
+        input.upstream_id = None;
     }
     parse_restart(&input.restart)?;
     parse_ports(&input.ports)?;
     Ok(())
+}
+
+/// Checks that a promote deployment's upstream exists and that following
+/// upstreams from it never leads back to the deployment itself.
+async fn check_upstream(db: &sqlx::SqlitePool, id: Option<i64>, upstream_id: Option<i64>) -> AppResult<()> {
+    let Some(mut cur) = upstream_id else {
+        return Ok(());
+    };
+    for _ in 0..32 {
+        if Some(cur) == id {
+            return Err(AppError::bad_request("a deployment can't promote from itself, directly or through others"));
+        }
+        let upstream = sqlx::query_as::<_, (String, Option<i64>)>("SELECT source, upstream_id FROM deployments WHERE id = ?")
+            .bind(cur)
+            .fetch_optional(db)
+            .await?
+            .ok_or_else(|| AppError::bad_request("the deployment to promote from no longer exists"))?;
+        match upstream {
+            (source, Some(next)) if source == "promote" => cur = next,
+            _ => return Ok(()),
+        }
+    }
+    Err(AppError::bad_request("promotion chain is too long"))
 }
 
 async fn create(State(state): State<AppState>, Json(mut input): Json<DeploymentInput>) -> AppResult<Json<Deployment>> {
@@ -336,14 +391,17 @@ async fn create(State(state): State<AppState>, Json(mut input): Json<DeploymentI
     validate_name(&name)?;
     resolve_branch(&state, &mut input, "").await?;
     validate(&mut input)?;
+    check_upstream(&state.db, None, input.upstream_id).await?;
     let ts = now();
     let d = sqlx::query_as::<_, Deployment>(
         "INSERT INTO deployments (name, image, ports, env, volumes, network, restart, command, created_at, updated_at,
-           source, git_url, git_branch, build_context, dockerfile, build_args, git_token, auto_deploy, webhook_secret, labels, git_account_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+           source, git_url, git_branch, build_context, dockerfile, build_args, git_token, auto_deploy, webhook_secret, labels, git_account_id,
+           upstream_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .bind(&name)
-    .bind(input.image.trim())
+    // A promote deployment's image is whatever it last promoted.
+    .bind(if input.source == "promote" { "" } else { input.image.trim() })
     .bind(&input.ports)
     .bind(&input.env)
     .bind(&input.volumes)
@@ -363,6 +421,7 @@ async fn create(State(state): State<AppState>, Json(mut input): Json<DeploymentI
     .bind(hex::encode(rand::random::<[u8; 20]>()))
     .bind(&input.labels)
     .bind(input.git_account_id)
+    .bind(input.upstream_id)
     .fetch_one(&state.db)
     .await?;
     Ok(Json(d))
@@ -376,13 +435,18 @@ async fn update(
     let existing = fetch(&state, &name).await?;
     resolve_branch(&state, &mut input, &existing.git_token).await?;
     validate(&mut input)?;
+    check_upstream(&state.db, Some(existing.id), input.upstream_id).await?;
     let d = sqlx::query_as::<_, Deployment>(
-        // A git deployment's image is set by its builds, not by the client.
+        // Git and promote deployments' images are set by their deploys, not by
+        // the client. Switching to promote clears what the old source ran.
         "UPDATE deployments SET
-           image = CASE WHEN ?1 = 'git' THEN image ELSE ?2 END,
+           image = CASE WHEN ?1 = 'promote' AND source != 'promote' THEN '' WHEN ?1 IN ('git', 'promote') THEN image ELSE ?2 END,
+           last_commit = CASE WHEN ?1 = 'promote' AND source != 'promote' THEN '' ELSE last_commit END,
+           last_commit_message = CASE WHEN ?1 = 'promote' AND source != 'promote' THEN '' ELSE last_commit_message END,
            ports = ?3, env = ?4, volumes = ?5, network = ?6, restart = ?7, command = ?8, updated_at = ?9,
            source = ?1, git_url = ?10, git_branch = ?11, build_context = ?12, dockerfile = ?13, build_args = ?14,
-           git_token = COALESCE(?15, git_token), auto_deploy = ?16, labels = ?18, git_account_id = ?19
+           git_token = COALESCE(?15, git_token), auto_deploy = ?16, labels = ?18, git_account_id = ?19,
+           upstream_id = ?20
          WHERE name = ?17 RETURNING *",
     )
     .bind(&input.source)
@@ -404,6 +468,7 @@ async fn update(
     .bind(&name)
     .bind(&input.labels)
     .bind(input.git_account_id)
+    .bind(input.upstream_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::not_found(format!("deployment '{name}' not found")))?;
@@ -416,6 +481,18 @@ async fn remove(State(state): State<AppState>, Path(name): Path<String>) -> AppR
         return Err(AppError::conflict(
             "deployment still has a container; destroy it before deleting",
         ));
+    }
+    let downstream = sqlx::query_scalar::<_, String>("SELECT name FROM deployments WHERE source = 'promote' AND upstream_id = ? ORDER BY name")
+        .bind(d.id)
+        .fetch_all(&state.db)
+        .await?;
+    if !downstream.is_empty() {
+        return Err(AppError::conflict(format!(
+            "{} promote{} from this deployment; change {} source first",
+            downstream.join(", "),
+            if downstream.len() == 1 { "s" } else { "" },
+            if downstream.len() == 1 { "its" } else { "their" },
+        )));
     }
     sqlx::query("DELETE FROM deployments WHERE id = ?")
         .bind(d.id)
@@ -437,6 +514,11 @@ async fn action(
         return Err(AppError::bad_request(format!("unknown action '{action}'")));
     }
     let d = fetch(&state, &name).await?;
+    // Deploying a promote deployment promotes its upstream's current deploy.
+    if action == "deploy" && d.source == "promote" {
+        let target = promote_target(&state, &d, None).await?;
+        return Ok(Json(run_op(&state, &user, d, "promote", Some(target)).await?));
+    }
     Ok(Json(run_action(&state, &user, d, &action).await?))
 }
 
@@ -446,7 +528,8 @@ pub async fn run_action(state: &AppState, user: &User, d: Deployment, action: &s
     run_op(state, user, d, action, None).await
 }
 
-async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, rollback_to: Option<Update>) -> AppResult<Update> {
+/// `target` is the deploy to roll back to, or the upstream deploy to promote.
+async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, target: Option<Update>) -> AppResult<Update> {
     let op = action.to_string();
     let st = state.clone();
     // A rebuild is a deploy that always builds, and is recorded as one.
@@ -469,14 +552,17 @@ async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, roll
         let cname = container_name(docker, &d).await;
         match op.as_str() {
             "deploy" if d.source == "git" => build_and_deploy(&st, &log, &d, false).await,
+            "deploy" if d.source == "promote" => anyhow::bail!("promote deployments are deployed by promoting"),
             "rebuild" if d.source == "git" => {
                 log.line("rebuilding, checking for newer base images").await;
                 build_and_deploy(&st, &log, &d, true).await
             }
             "rebuild" => anyhow::bail!("only git deployments are built; deploy to pull the image again"),
             "deploy" => deploy_image(docker, &log, &d).await,
-            "rollback" => roll_back(&st, &log, &d, rollback_to.expect("rollback target")).await,
+            "rollback" => roll_back(&st, &log, &d, target.expect("rollback target")).await,
+            "promote" => promote(&st, &log, &d, target.expect("promote target")).await,
             "pull" if d.source == "git" => anyhow::bail!("git deployments are built, not pulled; deploy to rebuild"),
+            "pull" if d.source == "promote" => anyhow::bail!("promote deployments run their upstream's images; promote instead"),
             "pull" => pull(docker, &log, &d.image).await,
             "start" => Ok(docker.start_container(&cname, None::<StartContainerOptions>).await?),
             "stop" => Ok(docker.stop_container(&cname, None::<StopContainerOptions>).await?),
@@ -485,16 +571,49 @@ async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, roll
             _ => unreachable!(),
         }?;
         // Once Harbor has created its own container, the imported one is gone.
-        if matches!(op.as_str(), "deploy" | "rebuild" | "rollback" | "destroy") && !d.adopted_container.is_empty() {
+        if matches!(op.as_str(), "deploy" | "rebuild" | "rollback" | "promote" | "destroy") && !d.adopted_container.is_empty() {
             sqlx::query("UPDATE deployments SET adopted_container = '' WHERE id = ?")
                 .bind(d.id)
                 .execute(&st.db)
                 .await?;
         }
         log.line(format!("{op} complete")).await;
+        if matches!(op.as_str(), "deploy" | "rebuild" | "rollback" | "promote") {
+            auto_promote(st.clone(), d, log).await;
+        }
         Ok(())
     })
     .await
+}
+
+/// Promotes the deploy `log` just finished to every deployment that
+/// auto-promotes from `upstream`. Boxed because promoting runs `run_op` again.
+fn auto_promote(state: AppState, upstream: Deployment, log: UpdateLog) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        let downstream = sqlx::query_as::<_, Deployment>(
+            "SELECT * FROM deployments WHERE source = 'promote' AND auto_deploy = 1 AND upstream_id = ? ORDER BY name",
+        )
+        .bind(upstream.id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        if downstream.is_empty() {
+            return;
+        }
+        // Still marked running (this deploy hasn't finished), but it has
+        // succeeded and its artifact is recorded.
+        let target = match sqlx::query_as::<_, Update>("SELECT * FROM updates WHERE id = ?").bind(log.id()).fetch_one(&state.db).await {
+            Ok(u) if !u.artifact.is_empty() => u,
+            _ => return,
+        };
+        for d in downstream {
+            let name = d.name.clone();
+            match run_op(&state, &system_user("auto-promote"), d, "promote", Some(target.clone())).await {
+                Ok(u) => log.line(format!("auto-promoting to {name} (update #{})", u.id)).await,
+                Err(e) => log.line(format!("auto-promote to {name} failed: {}", e.message)).await,
+            }
+        }
+    })
 }
 
 /// Builds the branch head's Dockerfile into `harbor/<name>:<sha>` and deploys
@@ -613,7 +732,7 @@ async fn rollback_target(state: &AppState, d: &Deployment, update_id: i64) -> Ap
         .await?
         .filter(|u| u.target_type == "deployment" && u.target_name == d.name)
         .ok_or_else(|| AppError::not_found("deploy not found for this deployment"))?;
-    if u.status != "success" || !matches!(u.operation.as_str(), "deploy" | "rollback") || u.snapshot.is_empty() || u.artifact.is_empty() {
+    if u.status != "success" || !matches!(u.operation.as_str(), "deploy" | "rollback" | "promote") || u.snapshot.is_empty() || u.artifact.is_empty() {
         return Err(AppError::bad_request("only successful deploys made by this version of Harbor can be rolled back to"));
     }
     if state.docker.inspect_image(&u.artifact).await.is_err() {
@@ -645,7 +764,7 @@ async fn roll_back(state: &AppState, log: &UpdateLog, d: &Deployment, target: Up
     // Rolling back to a rollback: describe the deploy it restored.
     let detail = target.detail.trim_start_matches("↩ ");
     let label = if detail.is_empty() {
-        format!("{} ({})", snapshot.image, short_image(&target.artifact))
+        format!("{} ({})", short_image(&snapshot.image), short_image(&target.artifact))
     } else {
         detail.to_string()
     };
@@ -658,8 +777,8 @@ async fn roll_back(state: &AppState, log: &UpdateLog, d: &Deployment, target: Up
     let (commit, message) = detail.split_once(' ').unwrap_or((detail, ""));
     sqlx::query(
         "UPDATE deployments SET image = ?, ports = ?, env = ?, volumes = ?, network = ?, restart = ?, command = ?, labels = ?, updated_at = ?,
-           last_commit = CASE WHEN source = 'git' THEN ? ELSE last_commit END,
-           last_commit_message = CASE WHEN source = 'git' THEN ? ELSE last_commit_message END
+           last_commit = CASE WHEN source IN ('git', 'promote') THEN ? ELSE last_commit END,
+           last_commit_message = CASE WHEN source IN ('git', 'promote') THEN ? ELSE last_commit_message END
          WHERE id = ?",
     )
     .bind(&snapshot.image)
@@ -683,6 +802,119 @@ async fn roll_back(state: &AppState, log: &UpdateLog, d: &Deployment, target: Up
     deploy(&state.docker, log, &restored, &target.artifact, false).await?;
     // Recorded like a deploy, so you can roll forward again.
     log.set_artifact(&target.artifact, &target.snapshot).await;
+    Ok(())
+}
+
+async fn upstream_of(state: &AppState, d: &Deployment) -> AppResult<Deployment> {
+    let id = d
+        .upstream_id
+        .filter(|_| d.source == "promote")
+        .ok_or_else(|| AppError::bad_request(format!("'{}' doesn't promote from another deployment", d.name)))?;
+    sqlx::query_as::<_, Deployment>("SELECT * FROM deployments WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::conflict("the deployment to promote from no longer exists"))
+}
+
+/// Successful deploys of `upstream` that can be promoted, newest first:
+/// just `id` when given, else up to `limit`.
+async fn promotable_updates(state: &AppState, upstream: &str, id: Option<i64>, limit: i64) -> AppResult<Vec<Update>> {
+    Ok(sqlx::query_as::<_, Update>(
+        "SELECT * FROM updates
+         WHERE (?1 IS NULL OR id = ?1) AND target_type = 'deployment' AND target_name = ?2 AND status = 'success'
+           AND operation IN ('deploy', 'rollback', 'promote') AND artifact != '' AND snapshot != ''
+         ORDER BY id DESC LIMIT ?3",
+    )
+    .bind(id)
+    .bind(upstream)
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?)
+}
+
+/// A successful deploy of the upstream to promote: `update_id`, or the most
+/// recent one (what the upstream runs now).
+async fn promote_target(state: &AppState, d: &Deployment, update_id: Option<i64>) -> AppResult<Update> {
+    let upstream = upstream_of(state, d).await?;
+    let u = promotable_updates(state, &upstream.name, update_id, 1).await?.pop().ok_or_else(|| match update_id {
+        Some(_) => AppError::bad_request(format!("only successful deploys of {} can be promoted", upstream.name)),
+        None => AppError::conflict(format!("{} has no successful deploy to promote yet", upstream.name)),
+    })?;
+    if state.docker.inspect_image(&u.artifact).await.is_err() {
+        return Err(AppError::conflict(
+            "the image for that deploy no longer exists (it was probably pruned); redeploy the upstream first",
+        ));
+    }
+    Ok(u)
+}
+
+#[derive(Serialize)]
+struct Promotable {
+    #[serde(flatten)]
+    update: Update,
+    /// Whether its image still exists.
+    available: bool,
+}
+
+/// The upstream's recent successful deploys, newest (what it runs now) first.
+async fn promotable(State(state): State<AppState>, Path(name): Path<String>) -> AppResult<Json<Vec<Promotable>>> {
+    let d = fetch(&state, &name).await?;
+    let upstream = upstream_of(&state, &d).await?;
+    let updates = promotable_updates(&state, &upstream.name, None, 30).await?;
+    let mut exists: HashMap<String, bool> = HashMap::new();
+    let mut items = Vec::with_capacity(updates.len());
+    for mut update in updates {
+        let available = match exists.get(&update.artifact) {
+            Some(&e) => e,
+            None => {
+                let e = state.docker.inspect_image(&update.artifact).await.is_ok();
+                exists.insert(update.artifact.clone(), e);
+                e
+            }
+        };
+        // Build logs can be large and aren't needed to pick a deploy.
+        update.log.clear();
+        items.push(Promotable { update, available });
+    }
+    Ok(Json(items))
+}
+
+async fn promote_update(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Path((name, update_id)): Path<(String, i64)>,
+) -> AppResult<Json<Update>> {
+    let d = fetch(&state, &name).await?;
+    let target = promote_target(&state, &d, Some(update_id)).await?;
+    Ok(Json(run_op(&state, &user, d, "promote", Some(target)).await?))
+}
+
+/// Runs the exact image an upstream deploy ran, with this deployment's own
+/// settings. Nothing is built or pulled, so it's what the upstream tested.
+async fn promote(state: &AppState, log: &UpdateLog, d: &Deployment, target: Update) -> anyhow::Result<()> {
+    // Re-check under the lock: the image may have been pruned meanwhile.
+    if state.docker.inspect_image(&target.artifact).await.is_err() {
+        anyhow::bail!("the image for that deploy no longer exists; redeploy {} first", target.target_name);
+    }
+    // The upstream's commit, also when that deploy was a rollback.
+    let detail = target.detail.trim_start_matches("↩ ");
+    let label = if detail.is_empty() { short_image(&target.artifact) } else { detail.to_string() };
+    log.line(format!("promoting {} deploy #{}: {label}", target.target_name, target.id)).await;
+    if !detail.is_empty() {
+        log.set_detail(detail).await;
+    }
+    deploy(&state.docker, log, d, &target.artifact, false).await?;
+    let (commit, message) = if detail.is_empty() { ("", "") } else { detail.split_once(' ').unwrap_or((detail, "")) };
+    sqlx::query("UPDATE deployments SET image = ?, last_commit = ?, last_commit_message = ? WHERE id = ?")
+        .bind(&target.artifact)
+        .bind(commit)
+        .bind(message)
+        .bind(d.id)
+        .execute(&state.db)
+        .await?;
+    let snapshot = Snapshot { image: target.artifact.clone(), ..Snapshot::of(d) };
+    log.set_artifact(&target.artifact, &snapshot.json()).await;
     Ok(())
 }
 
@@ -992,6 +1224,42 @@ mod tests {
         assert_eq!(b[0].host_ip.as_deref(), Some("127.0.0.1"));
         assert!(!bindings.contains_key("9000/tcp"));
         assert!(parse_ports("abc:80").is_err());
+    }
+
+    fn input(source: &str, upstream_id: Option<i64>) -> DeploymentInput {
+        serde_json::from_value(json!({ "source": source, "image": "nginx", "upstream_id": upstream_id })).unwrap()
+    }
+
+    #[test]
+    fn promote_requires_an_upstream() {
+        assert!(validate(&mut input("promote", None)).is_err());
+        assert!(validate(&mut input("promote", Some(1))).is_ok());
+        // Other sources drop a leftover upstream.
+        let mut i = input("image", Some(1));
+        validate(&mut i).unwrap();
+        assert_eq!(i.upstream_id, None);
+    }
+
+    #[tokio::test]
+    async fn rejects_promotion_cycles() {
+        let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!().run(&db).await.unwrap();
+        // staging (1, image) <- production (2) <- canary (3)
+        for (id, source, upstream) in [(1, "image", None), (2, "promote", Some(1)), (3, "promote", Some(2))] {
+            sqlx::query("INSERT INTO deployments (id, name, image, created_at, updated_at, source, upstream_id) VALUES (?, ?, '', '', '', ?, ?)")
+                .bind(id)
+                .bind(format!("d{id}"))
+                .bind(source)
+                .bind(upstream)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+        assert!(check_upstream(&db, None, Some(3)).await.is_ok());
+        assert!(check_upstream(&db, Some(2), Some(1)).await.is_ok());
+        assert!(check_upstream(&db, Some(1), Some(1)).await.is_err(), "itself");
+        assert!(check_upstream(&db, Some(1), Some(3)).await.is_err(), "through others");
+        assert!(check_upstream(&db, None, Some(99)).await.is_err(), "missing");
     }
 
     #[test]

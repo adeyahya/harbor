@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, Box, Cpu, FolderPlus, GitBranch, HardDrive, Layers, MemoryStick, PackageOpen, Pin, Plus } from 'lucide-react'
+import { ArrowRight, Box, ChevronsUp, Cpu, FolderPlus, GitBranch, HardDrive, Layers, MemoryStick, PackageOpen, Pin, Plus } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, Outlet, useLocation } from 'react-router'
-import { api, repoLabel, type ContainerSummary, type DeploymentListItem, type Port, type StackListItem, type SystemOverview } from '@/api'
+import { api, repoLabel, shortArtifact, type ContainerSummary, type DeploymentListItem, type Port, type StackListItem, type SystemOverview } from '@/api'
 import { GroupNameDialog, GroupSection, Section, ServiceCard, useCanvasActions, useCanvasGroups, type CanvasItem } from '@/components/app/canvas'
 import { useCreate } from '@/components/app/CreateDialog'
 import { GithubIcon } from '@/components/app/GithubIcon'
 import { ErrorAlert, Loading } from '@/components/app/page'
+import { isBehind } from '@/components/app/promote'
 import { StatusDot } from '@/components/app/status'
 import { Button } from '@/components/ui/button'
 import { bytes, containerName, percent } from '@/lib/format'
@@ -161,6 +162,7 @@ export function CanvasPage() {
     }),
     ...(deployments.data ?? []).map((d) => {
       const c = d.container_id ? byId.get(d.container_id) : undefined
+      const upstream = d.source === 'promote' ? deployments.data?.find((x) => x.id === d.upstream_id) : undefined
       return {
         kind: 'deployment' as const,
         name: d.name,
@@ -168,10 +170,26 @@ export function CanvasPage() {
         pinned: d.pinned,
         groupId: d.group_id,
         to: `/deployments/${d.name}`,
-        icon: d.source === 'git' ? <GithubIcon className="size-4.5" /> : <Box className="size-4.5" />,
+        icon: d.source === 'git' ? <GithubIcon className="size-4.5" /> : d.source === 'promote' ? <ChevronsUp className="size-4.5" /> : <Box className="size-4.5" />,
         body: (
           <>
-            {d.source === 'git' ? (
+            {d.source === 'promote' ? (
+              <div className="space-y-1 text-xs">
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <span>from</span>
+                  <span className="truncate font-medium text-foreground/90">{upstream?.name ?? 'missing upstream'}</span>
+                  {isBehind(d, upstream) && <span className="shrink-0 rounded border border-brand/30 bg-brand/10 px-1 text-[10px] font-medium text-brand">Update available</span>}
+                </div>
+                {d.last_commit ? (
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                    <span className="font-mono text-brand">{d.last_commit.slice(0, 7)}</span>
+                    <span className="truncate">{d.last_commit_message}</span>
+                  </div>
+                ) : (
+                  d.image && <p className="truncate font-mono text-muted-foreground">{shortArtifact(d.image)}</p>
+                )}
+              </div>
+            ) : d.source === 'git' ? (
               <div className="space-y-1 text-xs">
                 <div className="flex items-center gap-1.5 text-muted-foreground">
                   <span className="truncate font-medium text-foreground/90">{repoLabel(d.git_url)}</span>

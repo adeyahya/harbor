@@ -1,15 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownToLine, Box, GitBranch, Hammer, Info, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
+import { ArrowDownToLine, Box, ChevronsUp, CopyPlus, GitBranch, Hammer, Info, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { api, repoLabel, type Deployment, type DeploymentDetail } from '@/api'
+import { api, repoLabel, shortArtifact, type Deployment, type DeploymentDetail } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { ContainerDetails } from '@/components/app/containers'
 import { LogViewer } from '@/components/app/LogViewer'
 import { GithubIcon } from '@/components/app/GithubIcon'
 import { EmptyState, ErrorAlert, Loading } from '@/components/app/page'
 import { PortsEditor } from '@/components/app/PortsEditor'
+import { AutoPromoteSettings, CreateEnvironmentDialog, PromotePanel, useDeploymentList } from '@/components/app/promote'
 import { AutoDeploySettings, SourceSettings, type SourceSettingsSet } from '@/components/app/SourceSettings'
 import { ChangesBar, ServicePanel, SettingsSection, usePanelTab, VariablesEditor } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
@@ -41,6 +42,7 @@ const FIELDS = [
   'auto_deploy',
   'labels',
   'git_account_id',
+  'upstream_id',
 ] as const satisfies readonly (keyof Deployment)[]
 type Config = Pick<Deployment, (typeof FIELDS)[number]>
 const SETTINGS_FIELDS: (keyof Config)[] = FIELDS.filter((f) => f !== 'env')
@@ -74,6 +76,8 @@ function DeploymentPanelInner({ name }: { name: string }) {
   // null = unchanged, '' = remove, otherwise the replacement token.
   const [token, setToken] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<'destroy' | 'delete' | null>(null)
+  const [newEnv, setNewEnv] = useState(false)
+  const deployments = useDeploymentList().data
 
   const config: Config | null = data ? { ...pick(data), ...draft } : null
   const changed: string[] = data ? FIELDS.filter((f) => draft[f] !== undefined && draft[f] !== data[f]) : []
@@ -120,20 +124,38 @@ function DeploymentPanelInner({ name }: { name: string }) {
 
   const deployed = data.status !== 'not_deployed'
   const git = data.source === 'git'
-  // Git deployments set their image from each build, so only image deployments can drift.
+  const promoted = data.source === 'promote'
+  const upstream = deployments?.find((x) => x.id === data.upstream_id)
+  // Git and promote deployments set their image from each deploy, so only image deployments can drift.
   // A rollback runs an exact image ID (sha256:…), which is expected to differ from the tag.
   const runningImage = data.container?.Config.Image ?? ''
-  const drift = !git && !!data.container && !runningImage.startsWith('sha256:') && runningImage !== data.image
+  const drift = data.source === 'image' && !!data.container && !runningImage.startsWith('sha256:') && runningImage !== data.image
   const dot = (fields: string[]) => (fields.some((f) => changed.includes(f)) ? ' •' : '')
 
   return (
     <ServicePanel
-      icon={git ? <GithubIcon /> : <Box />}
+      icon={git ? <GithubIcon /> : promoted ? <ChevronsUp /> : <Box />}
       title={data.name}
       subtitle={
         <>
           <Status status={data.status} />
-          {git ? (
+          {promoted ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-xs">
+              <span>from</span>
+              {upstream ? (
+                <Link to={`/deployments/${upstream.name}`} className="truncate font-medium text-foreground/90 hover:underline">
+                  {upstream.name}
+                </Link>
+              ) : (
+                <span className="text-warning">missing upstream</span>
+              )}
+              {data.last_commit ? (
+                <span className="font-mono text-brand">{data.last_commit.slice(0, 7)}</span>
+              ) : (
+                data.image && <span className="truncate font-mono">{shortArtifact(data.image)}</span>
+              )}
+            </span>
+          ) : git ? (
             <span className="flex min-w-0 items-center gap-1.5 text-xs">
               <span className="truncate font-medium text-foreground/90">{repoLabel(data.git_url)}</span>
               <GitBranch className="size-3 shrink-0" />
@@ -157,8 +179,8 @@ function DeploymentPanelInner({ name }: { name: string }) {
       onTabChange={setTab}
       actions={
         <>
-          <Button size="sm" onClick={() => action('deploy')} disabled={run.isPending || save.isPending}>
-            <Play /> {deployed ? 'Redeploy' : 'Deploy'}
+          <Button size="sm" onClick={() => action('deploy')} disabled={run.isPending || save.isPending} title={promoted ? `Promote ${upstream?.name ?? 'the upstream'}'s current deploy` : undefined}>
+            {promoted ? <ChevronsUp /> : <Play />} {promoted ? 'Promote' : deployed ? 'Redeploy' : 'Deploy'}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -167,15 +189,19 @@ function DeploymentPanelInner({ name }: { name: string }) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              {git ? (
+              {git && (
                 <DropdownMenuItem onSelect={() => action('rebuild')} title="Build the branch again even if its commit was built before, checking for newer base images">
                   <Hammer /> Rebuild
                 </DropdownMenuItem>
-              ) : (
+              )}
+              {data.source === 'image' && (
                 <DropdownMenuItem onSelect={() => action('pull')}>
                   <ArrowDownToLine /> Pull image
                 </DropdownMenuItem>
               )}
+              <DropdownMenuItem onSelect={() => setNewEnv(true)}>
+                <CopyPlus /> New environment…
+              </DropdownMenuItem>
               {deployed && (
                 <>
                   {data.status === 'running' ? (
@@ -227,7 +253,12 @@ function DeploymentPanelInner({ name }: { name: string }) {
         </div>
       )}
 
-      {tab === 'deployments' && <DeploymentHistory targetType="deployment" targetName={name} />}
+      {tab === 'deployments' && (
+        <>
+          {promoted && <PromotePanel deployment={data} />}
+          <DeploymentHistory targetType="deployment" targetName={name} />
+        </>
+      )}
 
       {tab === 'logs' &&
         (data.container ? (
@@ -242,7 +273,7 @@ function DeploymentPanelInner({ name }: { name: string }) {
 
       {tab === 'settings' && (
         <div className="space-y-5">
-          <SourceSettings key={data.updated_at} config={config} set={setSource} hasToken={data.has_token} token={token} onTokenChange={setToken} />
+          <SourceSettings key={data.updated_at} config={config} set={setSource} hasToken={data.has_token} token={token} onTokenChange={setToken} selfId={data.id} />
           {config.source === 'git' && (
             <AutoDeploySettings
               webhookPath={`/api/webhooks/github/${data.name}`}
@@ -251,6 +282,13 @@ function DeploymentPanelInner({ name }: { name: string }) {
               enabled={config.auto_deploy}
               onEnabledChange={set('auto_deploy')}
               secret={data.webhook_secret}
+            />
+          )}
+          {config.source === 'promote' && (
+            <AutoPromoteSettings
+              upstream={deployments?.find((x) => x.id === config.upstream_id)?.name ?? ''}
+              enabled={config.auto_deploy}
+              onEnabledChange={set('auto_deploy')}
             />
           )}
           <SettingsSection title="Networking" description="Publish container ports on this host. Taken ports are flagged as you type.">
@@ -313,6 +351,7 @@ function DeploymentPanelInner({ name }: { name: string }) {
           <EmptyState icon={<Box />} title="No container">This deployment hasn't been deployed yet.</EmptyState>
         ))}
 
+      {newEnv && <CreateEnvironmentDialog source={data} open={newEnv} onOpenChange={setNewEnv} />}
       <Confirm
         open={confirm === 'destroy'}
         onOpenChange={(o) => !o && setConfirm(null)}

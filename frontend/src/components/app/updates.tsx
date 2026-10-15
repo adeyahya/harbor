@@ -167,7 +167,7 @@ function UpdateDialog({ id, onClose }: { id: number | null; onClose: () => void 
 }
 
 /** Deploy details look like "<sha7> <commit message>". */
-function splitDetail(detail: string) {
+export function splitDetail(detail: string) {
   // Rollbacks describe the deploy they restored: "↩ <sha7> <message>".
   const [sha, ...rest] = detail.replace(/^↩ /, '').split(' ')
   return /^[0-9a-f]{7,}$/.test(sha) ? { sha, message: rest.join(' ') } : { sha: '', message: detail }
@@ -202,7 +202,7 @@ export function DeploymentHistory({ targetType, targetName }: { targetType: 'sta
   if (!data?.length) return <EmptyState title="No deployments yet">Deploy this service and its history will show up here.</EmptyState>
   // The newest successful lifecycle change decides what's live: a deploy is
   // ACTIVE unless a later down/destroy removed it; older deploys are REMOVED.
-  const isDeploy = (u: Update) => u.operation === 'deploy' || u.operation === 'rollback'
+  const isDeploy = (u: Update) => ['deploy', 'rollback', 'promote'].includes(u.operation)
   const latest = data.find((u) => (isDeploy(u) || ['down', 'destroy'].includes(u.operation)) && u.status === 'success')
   const active = latest && isDeploy(latest) ? latest.id : undefined
   const canRollback = (u: Update) => u.id !== active && u.status === 'success' && isDeploy(u) && u.has_snapshot

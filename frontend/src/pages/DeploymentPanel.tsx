@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDownToLine, Box, ChevronsUp, CopyPlus, GitBranch, Info, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
+import { ArrowDownToLine, Box, ChevronsUp, CopyPlus, GitBranch, Hammer, Info, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -111,7 +111,7 @@ function DeploymentPanelInner({ name }: { name: string }) {
   const action = async (a: string) => {
     if (changed.length) await save.mutateAsync()
     run.mutate({ path: `/deployments/${name}/${a}` })
-    if (a === 'deploy') setTab('deployments')
+    if (a === 'deploy' || a === 'rebuild') setTab('deployments')
   }
 
   const shell = (body: React.ReactNode) => (
@@ -189,6 +189,11 @@ function DeploymentPanelInner({ name }: { name: string }) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
+              {git && (
+                <DropdownMenuItem onSelect={() => action('rebuild')} title="Build the branch again even if its commit was built before, checking for newer base images">
+                  <Hammer /> Rebuild
+                </DropdownMenuItem>
+              )}
               {data.source === 'image' && (
                 <DropdownMenuItem onSelect={() => action('pull')}>
                   <ArrowDownToLine /> Pull image

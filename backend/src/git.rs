@@ -134,6 +134,14 @@ pub async fn fetch_and_reset(log: &UpdateLog, dir: &Path, url: &str, rev: &str, 
     head(dir).await
 }
 
+/// Removes untracked and ignored files, so a reused checkout builds exactly
+/// like a fresh clone.
+pub async fn clean(log: &UpdateLog, dir: &Path) -> anyhow::Result<()> {
+    let mut cmd = git("");
+    cmd.args(["clean", "-ffdxq"]).current_dir(dir);
+    process::run(log, cmd, "git clean -ffdx").await
+}
+
 async fn head(dir: &Path) -> anyhow::Result<Commit> {
     let mut rev = git("");
     rev.args(["log", "-1", "--format=%H%n%s"]).current_dir(dir);
@@ -279,6 +287,7 @@ pub async fn build(
     build_args: &[String],
     tags: &[String],
     labels: &[String],
+    pull: bool,
 ) -> anyhow::Result<()> {
     validate_rel_path(context, "root directory").map_err(anyhow::Error::msg)?;
     validate_rel_path(dockerfile, "Dockerfile path").map_err(anyhow::Error::msg)?;
@@ -289,6 +298,10 @@ pub async fn build(
 
     let mut cmd = Command::new("docker");
     cmd.arg("build").arg("-f").arg(&file);
+    // Check the registry for newer base images instead of using local ones.
+    if pull {
+        cmd.arg("--pull");
+    }
     for tag in tags {
         cmd.args(["-t", tag]);
     }
@@ -303,7 +316,8 @@ pub async fn build(
         .env("DOCKER_BUILDKIT", "1")
         .env("BUILDKIT_PROGRESS", "plain");
     let shown = format!(
-        "docker build -f {} {}{}",
+        "docker build{} -f {} {}{}",
+        if pull { " --pull" } else { "" },
         file.display(),
         tags.iter().map(|t| format!("-t {t} ")).collect::<String>(),
         context

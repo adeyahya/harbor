@@ -251,6 +251,13 @@ volumes:
    `application/json`, the secret shown in Settings, and just the push event.
    Requests are verified with the `X-Hub-Signature-256` HMAC.
 
+**Redeploying** a commit that was already built reuses its image: Harbor
+checks the branch head with `git ls-remote`, and if `harbor/<name>:<commit>`
+exists it just recreates the container, so changing variables or ports and
+redeploying takes seconds. **⋯ → Rebuild** builds the commit again anyway,
+pulling newer base images. When a build is needed, Harbor fetches into the
+checkout it keeps under its data folder instead of cloning again.
+
 Each build is kept as `harbor/<name>:<commit>` so it can be rolled back to.
 Builds are labelled `harbor.deployment` and **"Prune unused" on the Images page
 skips them**; remove old builds individually there when you need the space.

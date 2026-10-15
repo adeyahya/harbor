@@ -33,6 +33,11 @@ design, compiled into the backend binary.
   built `harbor/<name>:<commit>` tag, or the pulled image's ID) and the
   settings it ran with. Rolling back reruns that image with those settings, with
   no rebuild or pull. Stacks roll back their compose file and variables.
+- **Environments** (staging → production): a deployment can take its image
+  from another deployment instead of a registry or repository. **Promote**
+  runs the exact image one of the upstream's deploys ran, with the
+  deployment's own ports, variables and volumes, so production gets what staging
+  tested. See [Staging and production](#staging-and-production).
 - **Containers**: list, start/stop/restart/remove, live log streaming, inspect.
 - **Images, volumes, networks**: list, remove, prune. Click a volume to browse its
   files read-only: folders, text previews, image previews and downloads. Harbor
@@ -256,6 +261,30 @@ commit, but the next push deploys as usual.
 
 Harbor controls your Docker engine, which is root-equivalent on the host. Only
 expose it on a trusted network or behind a TLS reverse proxy.
+
+## Staging and production
+
+Build or pull once, then promote the same image:
+
+1. Set up staging as usual, e.g. a GitHub deployment `api-staging` with
+   auto-deploy on.
+2. On its panel, **⋯ → New environment…** creates `api-production`, whose
+   source is *Another deployment* (`api-staging`). Variables, network, restart
+   policy and command are copied. Ports, volumes and labels aren't, so give
+   production its own.
+3. **Promote** on production runs whatever staging runs now. The Deployments tab
+   compares the two and lists staging's earlier deploys, so you can promote any of
+   them. Nothing is rebuilt or pulled. Registry images are promoted by image ID,
+   so a moving tag like `:latest` can't change what production gets.
+4. Optionally turn on **Auto-promote** to promote every successful staging
+   deploy as soon as it finishes. Chains such as dev → staging → production
+   work the same way.
+
+Production keeps its own history and rolls back like any other deployment. A
+deployment that others promote from can't be deleted until their source is
+changed. Promotion only carries the image, so configuration baked in at build
+time (build arguments, variables compiled into a frontend bundle) is the same in
+every environment. Pass environment-specific values as variables instead.
 
 ## Layout
 

@@ -19,7 +19,7 @@ use crate::{
     state::{AppState, now},
 };
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Clone, Serialize, sqlx::FromRow)]
 pub struct Update {
     pub id: i64,
     pub operation: String,
@@ -54,6 +54,10 @@ pub struct UpdateLog {
 }
 
 impl UpdateLog {
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
     pub async fn line(&self, text: impl AsRef<str>) {
         let mut text = text.as_ref().trim_end().to_string();
         text.push('\n');

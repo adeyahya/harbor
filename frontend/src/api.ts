@@ -201,12 +201,12 @@ export interface StackDetail extends Stack {
   containers: ContainerSummary[]
 }
 
-export type DeploymentSource = 'image' | 'git'
+export type DeploymentSource = 'image' | 'git' | 'promote'
 
 export interface Deployment {
   id: number
   name: string
-  /** For git deployments, the most recently built image tag. */
+  /** For git deployments, the most recently built image tag; for promote deployments, the artifact last promoted. */
   image: string
   ports: string
   env: string
@@ -236,6 +236,8 @@ export interface Deployment {
   group_id: number | null
   /** null = automatic (account for the repo's host), 0 = none. */
   git_account_id: number | null
+  /** For promote deployments, the deployment whose deploys are promoted. */
+  upstream_id: number | null
 }
 
 /** `owner/repo` for GitHub URLs, otherwise the URL itself. */
@@ -248,6 +250,19 @@ export interface DeploymentListItem extends Deployment {
   status: string
   container_id: string | null
   container_image: string | null
+  /** Image the last successful deploy ran. */
+  artifact: string | null
+}
+
+/** A successful deploy of a promote deployment's upstream. */
+export interface Promotable extends Update {
+  /** Whether its image still exists. */
+  available: boolean
+}
+
+/** Short form of an artifact: a sha256 image ID shortened, a tag as is. */
+export function shortArtifact(a: string): string {
+  return a.startsWith('sha256:') ? a.slice(7, 19) : a
 }
 
 export interface DeploymentDetail extends Deployment {

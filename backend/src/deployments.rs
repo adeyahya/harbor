@@ -433,7 +433,7 @@ async fn action(
     Extension(user): Extension<User>,
     Path((name, action)): Path<(String, String)>,
 ) -> AppResult<Json<Update>> {
-    if !matches!(action.as_str(), "deploy" | "pull" | "start" | "stop" | "restart" | "destroy") {
+    if !matches!(action.as_str(), "deploy" | "rebuild" | "pull" | "start" | "stop" | "restart" | "destroy") {
         return Err(AppError::bad_request(format!("unknown action '{action}'")));
     }
     let d = fetch(&state, &name).await?;
@@ -449,7 +449,9 @@ pub async fn run_action(state: &AppState, user: &User, d: Deployment, action: &s
 async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, rollback_to: Option<Update>) -> AppResult<Update> {
     let op = action.to_string();
     let st = state.clone();
-    updates::spawn(state, user, "deployment", &d.name.clone(), action, move |log| async move {
+    // A rebuild is a deploy that always builds, and is recorded as one.
+    let recorded = if action == "rebuild" { "deploy" } else { action };
+    updates::spawn(state, user, "deployment", &d.name.clone(), recorded, move |log| async move {
         let lock = st.lock_for(&format!("deployment:{}", d.name));
         let _guard = match lock.try_lock() {
             Ok(g) => g,
@@ -466,7 +468,12 @@ async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, roll
         let docker = &st.docker;
         let cname = container_name(docker, &d).await;
         match op.as_str() {
-            "deploy" if d.source == "git" => build_and_deploy(&st, &log, &d).await,
+            "deploy" if d.source == "git" => build_and_deploy(&st, &log, &d, false).await,
+            "rebuild" if d.source == "git" => {
+                log.line("rebuilding, checking for newer base images").await;
+                build_and_deploy(&st, &log, &d, true).await
+            }
+            "rebuild" => anyhow::bail!("only git deployments are built; deploy to pull the image again"),
             "deploy" => deploy_image(docker, &log, &d).await,
             "rollback" => roll_back(&st, &log, &d, rollback_to.expect("rollback target")).await,
             "pull" if d.source == "git" => anyhow::bail!("git deployments are built, not pulled; deploy to rebuild"),
@@ -478,7 +485,7 @@ async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, roll
             _ => unreachable!(),
         }?;
         // Once Harbor has created its own container, the imported one is gone.
-        if matches!(op.as_str(), "deploy" | "rollback" | "destroy") && !d.adopted_container.is_empty() {
+        if matches!(op.as_str(), "deploy" | "rebuild" | "rollback" | "destroy") && !d.adopted_container.is_empty() {
             sqlx::query("UPDATE deployments SET adopted_container = '' WHERE id = ?")
                 .bind(d.id)
                 .execute(&st.db)
@@ -490,41 +497,101 @@ async fn run_op(state: &AppState, user: &User, d: Deployment, action: &str, roll
     .await
 }
 
-/// Clones the branch, builds its Dockerfile into `harbor/<name>:<sha>`, and
-/// deploys the result.
-async fn build_and_deploy(state: &AppState, log: &UpdateLog, d: &Deployment) -> anyhow::Result<()> {
-    let checkout = state.builds_dir().join(&d.name);
+/// Builds the branch head's Dockerfile into `harbor/<name>:<sha>` and deploys
+/// it. When that commit was built before, its image is reused unless
+/// `rebuild` is set, so redeploying after a settings change skips git and the
+/// build. Rebuilds also check for newer base images.
+async fn build_and_deploy(state: &AppState, log: &UpdateLog, d: &Deployment, rebuild: bool) -> anyhow::Result<()> {
+    let repo = format!("harbor/{}", d.name);
     let token = d.token(&state.db).await;
-    let commit = git::clone(log, &d.git_url, &d.git_branch, &token, &checkout).await?;
+    let tag_for = |sha: &str| format!("{repo}:{}", &sha[..sha.len().min(12)]);
+
+    if !rebuild && let Some(commit) = built_head(state, log, d, &token, &tag_for).await {
+        log.line(format!("{} \"{}\" is already built; reusing {} (rebuild to build it again)", commit.short(), commit.message, tag_for(&commit.sha))).await;
+        return finish_git_deploy(state, log, d, &commit, &tag_for(&commit.sha)).await;
+    }
+
+    // The checkout is kept between builds, so later ones only fetch.
+    let checkout = state.builds_dir().join(&d.name);
+    let commit = match git::sync_checkout(log, &checkout, &d.git_url, &d.git_branch, &token).await {
+        Ok(c) => c,
+        // A broken checkout (e.g. an interrupted fetch) is replaced by a fresh clone.
+        Err(e) if checkout.exists() => {
+            log.line(format!("reusing the checkout failed ({e:#}); cloning again")).await;
+            git::clone(log, &d.git_url, &d.git_branch, &token, &checkout).await?
+        }
+        Err(e) => return Err(e),
+    };
+    git::clean(log, &checkout).await?;
     log.line(format!("checked out {} \"{}\"", commit.short(), commit.message)).await;
-    log.set_detail(&format!("{} {}", commit.short(), commit.message)).await;
     sqlx::query("UPDATE deployments SET last_seen_commit = ? WHERE id = ?")
         .bind(&commit.sha)
         .bind(d.id)
         .execute(&state.db)
         .await?;
 
-    let repo = format!("harbor/{}", d.name);
-    let tag = format!("{repo}:{}", &commit.sha[..commit.sha.len().min(12)]);
+    let tag = tag_for(&commit.sha);
     let build_args: Vec<String> = lines(&d.build_args).map(str::to_string).collect();
     // The label keeps builds out of "prune unused images" so they stay
     // available for rollback.
     let labels = [format!("{LABEL}={}", d.name)];
-    let built = git::build(log, &checkout, &d.build_context, &d.dockerfile, &build_args, &[tag.clone(), format!("{repo}:latest")], &labels).await;
-    // The checkout is only needed for the build.
-    tokio::fs::remove_dir_all(&checkout).await.ok();
-    built?;
+    git::build(log, &checkout, &d.build_context, &d.dockerfile, &build_args, &[tag.clone(), format!("{repo}:latest")], &labels, rebuild).await?;
+    finish_git_deploy(state, log, d, &commit, &tag).await
+}
 
-    deploy(&state.docker, log, d, &tag, false).await?;
-    sqlx::query("UPDATE deployments SET image = ?, last_commit = ?, last_commit_message = ? WHERE id = ?")
-        .bind(&tag)
+/// The branch head, if its image was already built. Any failure just means
+/// building as usual.
+async fn built_head(
+    state: &AppState,
+    log: &UpdateLog,
+    d: &Deployment,
+    token: &str,
+    tag_for: &impl Fn(&str) -> String,
+) -> Option<git::Commit> {
+    let head = tokio::time::timeout(std::time::Duration::from_secs(30), git::remote_head(&d.git_url, &d.git_branch, token)).await;
+    let sha = match head {
+        Ok(Ok(Some(sha))) => sha,
+        Ok(Err(e)) => {
+            log.line(format!("couldn't check the branch head ({e:#}); building")).await;
+            return None;
+        }
+        _ => return None,
+    };
+    state.docker.inspect_image(&tag_for(&sha)).await.ok()?;
+    // The commit message isn't in ls-remote: take it from the deploy that built it.
+    let message = if d.last_commit == sha {
+        d.last_commit_message.clone()
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT detail FROM updates WHERE target_type = 'deployment' AND target_name = ? AND artifact = ? AND detail != ''
+             ORDER BY id DESC LIMIT 1",
+        )
+        .bind(&d.name)
+        .bind(tag_for(&sha))
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|detail| detail.trim_start_matches("↩ ").split_once(' ').map(|(_, m)| m.to_string()))
+        .unwrap_or_default()
+    };
+    Some(git::Commit { sha, message })
+}
+
+/// Runs a built commit's image and records it as the deployment's current one.
+async fn finish_git_deploy(state: &AppState, log: &UpdateLog, d: &Deployment, commit: &git::Commit, tag: &str) -> anyhow::Result<()> {
+    log.set_detail(&format!("{} {}", commit.short(), commit.message)).await;
+    deploy(&state.docker, log, d, tag, false).await?;
+    sqlx::query("UPDATE deployments SET image = ?, last_commit = ?, last_commit_message = ?, last_seen_commit = ? WHERE id = ?")
+        .bind(tag)
         .bind(&commit.sha)
         .bind(&commit.message)
+        .bind(&commit.sha)
         .bind(d.id)
         .execute(&state.db)
         .await?;
-    let snapshot = Snapshot { image: tag.clone(), ..Snapshot::of(d) };
-    log.set_artifact(&tag, &snapshot.json()).await;
+    let snapshot = Snapshot { image: tag.to_string(), ..Snapshot::of(d) };
+    log.set_artifact(tag, &snapshot.json()).await;
     Ok(())
 }
 

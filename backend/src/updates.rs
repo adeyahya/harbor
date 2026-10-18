@@ -2,20 +2,25 @@
 //! "update": a row holding its status and a running log, so the UI can follow
 //! long-running work and keep a history of what happened.
 
-use std::{future::Future, time::Duration};
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, Query, State},
-    routing::get,
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::AbortHandle};
 
 use crate::{
     auth::User,
-    error::AppResult,
+    error::{AppError, AppResult},
     state::{AppState, now},
 };
 
@@ -51,11 +56,50 @@ pub struct UpdateLog {
     db: SqlitePool,
     id: i64,
     tx: mpsc::UnboundedSender<String>,
+    cancel: Arc<Mutex<Cancel>>,
+}
+
+/// Whether a running update may still be cancelled.
+enum Cancel {
+    Allowed,
+    /// The operation is in a step that must not be cut short.
+    Blocked,
+    Requested { by: String },
+}
+
+/// Updates that are still running, so they can be cancelled.
+#[derive(Clone, Default)]
+pub struct Running(Arc<Mutex<HashMap<i64, RunningTask>>>);
+
+type RunningTask = (AbortHandle, Arc<Mutex<Cancel>>);
+
+/// Keeps an update from being cancelled until dropped.
+pub struct NoCancel(Arc<Mutex<Cancel>>);
+
+impl Drop for NoCancel {
+    fn drop(&mut self) {
+        let mut c = self.0.lock().expect("cancel poisoned");
+        if matches!(*c, Cancel::Blocked) {
+            *c = Cancel::Allowed;
+        }
+    }
 }
 
 impl UpdateLog {
     pub fn id(&self) -> i64 {
         self.id
+    }
+
+    /// Blocks cancelling while the returned guard is alive, for steps that
+    /// would leave things broken if aborted halfway (e.g. replacing a
+    /// container). Fails if a cancel already came in.
+    pub fn no_cancel(&self) -> anyhow::Result<NoCancel> {
+        let mut c = self.cancel.lock().expect("cancel poisoned");
+        if let Cancel::Requested { by } = &*c {
+            anyhow::bail!("cancelled by {by}");
+        }
+        *c = Cancel::Blocked;
+        Ok(NoCancel(self.cancel.clone()))
     }
 
     pub async fn line(&self, text: impl AsRef<str>) {
@@ -159,11 +203,30 @@ where
     let id = update.id;
     let (tx, rx) = mpsc::unbounded_channel();
     let writer = tokio::spawn(write_logs(db.clone(), id, rx));
-    let log = UpdateLog { db: db.clone(), id, tx };
+    let cancel = Arc::new(Mutex::new(Cancel::Allowed));
+    let log = UpdateLog { db: db.clone(), id, tx, cancel: cancel.clone() };
+    let running = state.running.clone();
+    // Hold the registry while spawning so a cancel can't miss the task.
+    let task = {
+        let mut map = running.0.lock().expect("running poisoned");
+        let task = tokio::spawn(op(log.clone()));
+        map.insert(id, (task.abort_handle(), cancel.clone()));
+        task
+    };
     tokio::spawn(async move {
-        let result = tokio::spawn(op(log.clone())).await;
+        let result = task.await;
+        running.0.lock().expect("running poisoned").remove(&id);
+        let cancelled_by = match &*cancel.lock().expect("cancel poisoned") {
+            Cancel::Requested { by } => Some(by.clone()),
+            _ => None,
+        };
         let status = match result {
             Ok(Ok(())) => "success",
+            // Aborted, or stopped itself at a no_cancel() after the request.
+            _ if let Some(by) = cancelled_by => {
+                log.line(format!("ERROR: cancelled by {by}")).await;
+                "cancelled"
+            }
             Ok(Err(e)) => {
                 log.line(format!("ERROR: {e:#}")).await;
                 "failed"
@@ -211,6 +274,31 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list))
         .route("/{id}", get(get_one))
+        .route("/{id}/cancel", post(cancel))
+}
+
+/// Aborts a running update. Its child processes (git, docker build, compose)
+/// are killed as the task is dropped, and its resource lock is released so
+/// queued operations go ahead.
+async fn cancel(State(state): State<AppState>, Extension(user): Extension<User>, Path(id): Path<i64>) -> AppResult<Json<Update>> {
+    {
+        let map = state.running.0.lock().expect("running poisoned");
+        let Some((handle, cancel)) = map.get(&id) else {
+            return Err(AppError::conflict("this operation is not running"));
+        };
+        let mut c = cancel.lock().expect("cancel poisoned");
+        match &*c {
+            Cancel::Blocked => {
+                return Err(AppError::conflict("this operation is replacing its container and can't be cancelled now; try again in a moment"));
+            }
+            Cancel::Requested { .. } => {}
+            Cancel::Allowed => {
+                *c = Cancel::Requested { by: user.username.clone() };
+                handle.abort();
+            }
+        }
+    }
+    get_one(State(state), Path(id)).await
 }
 
 async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> AppResult<Json<Vec<Update>>> {

@@ -1009,6 +1009,9 @@ async fn deploy(docker: &Docker, log: &UpdateLog, d: &Deployment, image: &str, p
             return Err(e);
         }
     }
+    // From here the old container is removed, so finish rather than leave
+    // the deployment with nothing running.
+    let _no_cancel = log.no_cancel()?;
     destroy_all(docker, log, d).await?;
 
     let (exposed, bindings) = parse_ports(&d.ports).map_err(|e| anyhow::anyhow!(e.message))?;

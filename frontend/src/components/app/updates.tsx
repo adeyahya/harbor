@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, ChevronDown, ChevronRight, Loader2, Undo2, X, XCircle } from 'lucide-react'
+import { Ban, CheckCircle2, ChevronDown, ChevronRight, Loader2, Square, Undo2, X, XCircle } from 'lucide-react'
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { api, type Update } from '@/api'
@@ -60,6 +60,71 @@ export function useRunAction() {
   })
 }
 
+/** Asks the server to abort a running update. */
+function useCancelUpdate(id: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<Update>(`/updates/${id}/cancel`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['update', id] })
+      qc.invalidateQueries({ queryKey: ['updates'] })
+    },
+    onError: (e) => toast.error(e.message),
+  })
+}
+
+/** Stops a running update after confirming; renders nothing once it's done. */
+function CancelButton({ u, compact = false }: { u: Update; compact?: boolean }) {
+  const cancel = useCancelUpdate(u.id)
+  const [confirming, setConfirming] = useState(false)
+  if (u.status !== 'running') return null
+  const open = (e: { stopPropagation: () => void }) => {
+    e.stopPropagation()
+    setConfirming(true)
+  }
+  return (
+    // Stops clicks (including from the portalled dialog) reaching a row button.
+    <span className="contents" onClick={(e) => e.stopPropagation()}>
+      {compact ? (
+        <button
+          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive disabled:opacity-50"
+          onClick={open}
+          disabled={cancel.isPending}
+          aria-label="Cancel"
+          title="Cancel"
+        >
+          {cancel.isPending ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
+        </button>
+      ) : (
+        <Button asChild variant="outline" size="sm" className={cn(cancel.isPending && 'pointer-events-none opacity-50')}>
+          {/* A span, since this can sit inside a row button. */}
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={open}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                open(e)
+              }
+            }}
+          >
+            {cancel.isPending ? <Loader2 className="animate-spin" /> : <Square className="fill-current" />} Cancel
+          </span>
+        </Button>
+      )}
+      <Confirm
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={`Stop this ${u.operation}?`}
+        description="The running build or command is stopped and nothing new is deployed. Whatever is running now keeps running."
+        confirmLabel="Yes, stop it"
+        onConfirm={() => cancel.mutate()}
+      />
+    </span>
+  )
+}
+
 export function useUpdate(id: number | null) {
   const qc = useQueryClient()
   const query = useQuery({
@@ -112,6 +177,7 @@ function UpdateTitle({ u }: { u: Update }) {
 function StatusIcon({ status }: { status: Update['status'] }) {
   if (status === 'running') return <Loader2 className="size-4 shrink-0 animate-spin text-brand" />
   if (status === 'success') return <CheckCircle2 className="size-4 shrink-0 text-success" />
+  if (status === 'cancelled') return <Ban className="size-4 shrink-0 text-muted-foreground" />
   return <XCircle className="size-4 shrink-0 text-destructive" />
 }
 
@@ -125,6 +191,7 @@ function TrayItem({ id, onDismiss }: { id: number; onDismiss: () => void }) {
         <StatusIcon status={data.status} />
         <UpdateTitle u={data} />
         <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">{duration(data.started_at, data.finished_at)}</span>
+        <CancelButton u={data} compact />
         <button className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => setExpanded((e) => !e)} aria-label={expanded ? 'Collapse' : 'Expand'}>
           <ChevronDown className={cn('size-4 transition-transform', !expanded && 'rotate-180')} />
         </button>
@@ -148,6 +215,9 @@ function UpdateDialog({ id, onClose }: { id: number | null; onClose: () => void 
               <DialogTitle className="flex items-center gap-3">
                 <UpdateTitle u={data} />
                 <UpdateStatus status={data.status} />
+                <span className="mr-6 ml-auto">
+                  <CancelButton u={data} />
+                </span>
               </DialogTitle>
               <DialogDescription>
                 {data.target_type} · by {data.username} · {timeAgo(data.started_at)} · took {duration(data.started_at, data.finished_at)}
@@ -236,6 +306,7 @@ export function DeploymentHistory({ targetType, targetName }: { targetType: 'sta
               </div>
             </div>
             <UpdateStatus status={u.status} className="hidden sm:inline-flex" />
+            <CancelButton u={u} />
             {canRollback(u) && (
               <Button
                 asChild

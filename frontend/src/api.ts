@@ -46,7 +46,7 @@ export interface Update {
   operation: string
   target_type: string
   target_name: string
-  status: 'running' | 'success' | 'failed'
+  status: 'running' | 'success' | 'failed' | 'cancelled'
   log: string
   username: string
   started_at: string

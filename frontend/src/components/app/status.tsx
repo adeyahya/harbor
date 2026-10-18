@@ -12,6 +12,7 @@ const META: Record<string, { label: string; tone: Tone; pulse?: boolean }> = {
   created: { label: 'Created', tone: 'info' },
   in_progress: { label: 'Deploying', tone: 'info', pulse: true },
   failed: { label: 'Failed', tone: 'danger' },
+  cancelled: { label: 'Cancelled', tone: 'neutral' },
   dead: { label: 'Crashed', tone: 'danger' },
   exited: { label: 'Stopped', tone: 'neutral' },
   stopped: { label: 'Stopped', tone: 'neutral' },

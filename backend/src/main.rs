@@ -72,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
         data_dir,
         host_stats,
         locks: Default::default(),
+        running: Default::default(),
         listen_port: addr.port(),
         helpers: Default::default(),
     };

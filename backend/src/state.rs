@@ -23,6 +23,8 @@ pub struct AppState {
     /// One lock per resource so overlapping operations (e.g. two quick pushes)
     /// run one after another instead of racing.
     pub locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// Running updates, for cancelling them.
+    pub running: crate::updates::Running,
 }
 
 impl AppState {

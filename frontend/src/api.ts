@@ -376,3 +376,66 @@ export interface VolumeFilePreview {
   binary: boolean
   truncated: boolean
 }
+
+export type BackupDestinationKind = 'gdrive' | 'local' | 'rclone'
+
+/** Where volume backups go. Secrets (OAuth tokens, rclone config) are never returned. */
+export interface BackupDestination {
+  id: number
+  name: string
+  kind: BackupDestinationKind
+  created_at: string
+  /** local: folder on Harbor's filesystem. */
+  path: string
+  /** gdrive: OAuth client. */
+  client_id: string
+  has_client_secret: boolean
+  folder_name: string
+  /** gdrive: email of the connected Google account. */
+  account: string
+  /** gdrive: authorized; other kinds are always connected. */
+  connected: boolean
+  /** rclone: `remote:path`. */
+  remote: string
+  has_rclone_config: boolean
+}
+
+export interface BackupJob {
+  id: number
+  volume: string
+  destination_id: number
+  destination_name: string
+  destination_kind: BackupDestinationKind
+  /** Five-field cron expression in the server's time zone. */
+  schedule: string
+  /** Backups to keep; 0 keeps all. */
+  keep: number
+  stop_containers: boolean
+  enabled: boolean
+  next_run_at: string | null
+  last_update_id: number | null
+  last_status: Update['status'] | null
+  last_run_at: string | null
+  created_at: string
+}
+
+export interface Backup {
+  id: number
+  volume: string
+  job_id: number | null
+  /** null once the destination is removed. */
+  destination_id: number | null
+  destination_name: string | null
+  destination_kind: BackupDestinationKind | null
+  file_name: string
+  size: number
+  update_id: number | null
+  created_at: string
+}
+
+export interface SchedulePreview {
+  description: string
+  /** Next runs, ISO timestamps. */
+  next: string[]
+  timezone: string
+}

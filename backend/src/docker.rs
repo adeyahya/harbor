@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .route("/containers", get(list_containers))
         .route("/containers/{id}", get(inspect_container).delete(remove_container))
         .route("/containers/{id}/logs", get(container_logs))
+        .route("/containers/{id}/terminal", get(crate::terminal::open))
         .route("/containers/{id}/{action}", post(container_action))
         .route("/images", get(list_images))
         .route("/image-ports", get(image_ports))

@@ -7,6 +7,7 @@ import { api, repoLabel, type Stack, type StackDetail } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { ContainersTable } from '@/components/app/containers'
 import { LogViewer } from '@/components/app/LogViewer'
+import { Terminal } from '@/components/app/Terminal'
 import { GithubIcon } from '@/components/app/GithubIcon'
 import { EmptyState, ErrorAlert, Loading } from '@/components/app/page'
 import { AutoDeploySettings, StackSourceSettings, type StackSourceConfig } from '@/components/app/SourceSettings'
@@ -18,7 +19,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { containerName, timeAgo } from '@/lib/format'
 
-const TABS = ['deployments', 'services', 'logs', 'variables', 'settings'] as const
+const TABS = ['deployments', 'services', 'logs', 'terminal', 'variables', 'settings'] as const
 
 const FIELDS = ['compose', 'env', 'source', 'git_url', 'git_branch', 'compose_path', 'project_dir', 'auto_deploy', 'git_account_id'] as const satisfies readonly (keyof Stack)[]
 type Config = Pick<Stack, (typeof FIELDS)[number]>
@@ -126,6 +127,7 @@ function StackPanelInner({ name }: { name: string }) {
         { id: 'deployments', label: 'Deployments' },
         { id: 'services', label: `Services${data.containers.length ? ` · ${data.containers.length}` : ''}` },
         { id: 'logs', label: 'Logs' },
+        { id: 'terminal', label: 'Terminal' },
         { id: 'variables', label: `Variables${dot(['env'])}` },
         { id: 'settings', label: `Settings${dot(['compose', 'source', 'git_url', 'git_branch', 'compose_path', 'project_dir', 'auto_deploy', 'git_account_id', 'git_token'])}` },
       ]}
@@ -201,7 +203,7 @@ function StackPanelInner({ name }: { name: string }) {
           </EmptyState>
         ))}
 
-      {tab === 'logs' &&
+      {(tab === 'logs' || tab === 'terminal') &&
         (selectedLog ? (
           <div className="flex h-[calc(100vh-15rem)] min-h-96 flex-col gap-3">
             {data.containers.length > 1 && (
@@ -218,10 +220,14 @@ function StackPanelInner({ name }: { name: string }) {
                 </SelectContent>
               </Select>
             )}
-            <LogViewer key={selectedLog.Id} containerId={selectedLog.Id} className="min-h-0 flex-1" />
+            {tab === 'logs' ? (
+              <LogViewer key={selectedLog.Id} containerId={selectedLog.Id} className="min-h-0 flex-1" />
+            ) : (
+              <Terminal key={selectedLog.Id} containerId={selectedLog.Id} running={selectedLog.State === 'running'} className="min-h-0 flex-1" />
+            )}
           </div>
         ) : (
-          <EmptyState title="No running services">Deploy the stack to see its logs.</EmptyState>
+          <EmptyState title="No running services">Deploy the stack to {tab === 'logs' ? 'see its logs' : 'open a terminal in its services'}.</EmptyState>
         ))}
 
       {tab === 'variables' && (

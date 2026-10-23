@@ -7,6 +7,7 @@ import { api, repoLabel, shortArtifact, type Deployment, type DeploymentDetail }
 import { Confirm } from '@/components/app/confirm'
 import { ContainerDetails } from '@/components/app/containers'
 import { LogViewer } from '@/components/app/LogViewer'
+import { Terminal } from '@/components/app/Terminal'
 import { GithubIcon } from '@/components/app/GithubIcon'
 import { EmptyState, ErrorAlert, Loading } from '@/components/app/page'
 import { PortsEditor } from '@/components/app/PortsEditor'
@@ -23,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { timeAgo } from '@/lib/format'
 
-const TABS = ['deployments', 'logs', 'variables', 'settings', 'container'] as const
+const TABS = ['deployments', 'logs', 'terminal', 'variables', 'settings', 'container'] as const
 
 const FIELDS = [
   'image',
@@ -171,6 +172,7 @@ function DeploymentPanelInner({ name }: { name: string }) {
       tabs={[
         { id: 'deployments', label: 'Deployments' },
         { id: 'logs', label: 'Logs' },
+        { id: 'terminal', label: 'Terminal' },
         { id: 'variables', label: `Variables${dot(['env'])}` },
         { id: 'settings', label: `Settings${dot([...SETTINGS_FIELDS, 'git_token'])}` },
         { id: 'container', label: 'Container' },
@@ -266,6 +268,15 @@ function DeploymentPanelInner({ name }: { name: string }) {
         ) : (
           <EmptyState icon={<Box />} title="Not deployed" action={<Button onClick={() => action('deploy')}>Deploy now</Button>}>
             Deploy to start a container and stream its logs.
+          </EmptyState>
+        ))}
+
+      {tab === 'terminal' &&
+        (data.container ? (
+          <Terminal containerId={data.container.Id} running={data.container.State.Running} className="h-[calc(100vh-15rem)] min-h-96" />
+        ) : (
+          <EmptyState icon={<Box />} title="Not deployed" action={<Button onClick={() => action('deploy')}>Deploy now</Button>}>
+            Deploy to start a container you can open a terminal in.
           </EmptyState>
         ))}
 

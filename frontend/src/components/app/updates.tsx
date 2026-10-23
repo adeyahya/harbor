@@ -50,8 +50,8 @@ export function useRunAction() {
   const { track } = useUpdatesContext()
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ path, method = 'post' }: { path: string; method?: 'post' | 'del' }) =>
-      method === 'del' ? api.del<Update>(path) : api.post<Update>(path),
+    mutationFn: ({ path, method = 'post', body }: { path: string; method?: 'post' | 'del'; body?: unknown }) =>
+      method === 'del' ? api.del<Update>(path) : api.post<Update>(path, body),
     onSuccess: (u) => {
       track(u)
       qc.invalidateQueries({ queryKey: ['updates'] })

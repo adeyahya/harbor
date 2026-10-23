@@ -151,16 +151,9 @@ async fn helper(state: &AppState, volume: &str) -> AppResult<String> {
     }
 
     state.docker.inspect_volume(volume).await?;
-    if state.docker.inspect_image(HELPER_IMAGE).await.is_err() {
-        let mut pull = state.docker.create_image(
-            Some(CreateImageOptions { from_image: Some(HELPER_IMAGE.into()), ..Default::default() }),
-            None,
-            None,
-        );
-        while let Some(item) = pull.next().await {
-            item.map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, format!("pulling {HELPER_IMAGE}: {e}")))?;
-        }
-    }
+    ensure_image(&state.docker, HELPER_IMAGE)
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
     let created = state
         .docker
         .create_container(
@@ -192,6 +185,18 @@ async fn helper(state: &AppState, volume: &str) -> AppResult<String> {
     state.docker.start_container(&created.id, None::<StartContainerOptions>).await?;
     touch(state, volume, &created.id);
     Ok(created.id)
+}
+
+/// Pulls `image` unless it's already present.
+pub async fn ensure_image(docker: &Docker, image: &str) -> anyhow::Result<()> {
+    if docker.inspect_image(image).await.is_ok() {
+        return Ok(());
+    }
+    let mut pull = docker.create_image(Some(CreateImageOptions { from_image: Some(image.into()), ..Default::default() }), None, None);
+    while let Some(item) = pull.next().await {
+        item.map_err(|e| anyhow::anyhow!("pulling {image}: {e}"))?;
+    }
+    Ok(())
 }
 
 fn touch(state: &AppState, volume: &str, id: &str) {

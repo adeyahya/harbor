@@ -3,6 +3,7 @@ import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { api, type GitAccount } from '@/api'
+import { BackupDestinationsSection } from '@/components/app/backups'
 import { Confirm } from '@/components/app/confirm'
 import { GithubIcon } from '@/components/app/GithubIcon'
 import { EmptyState, ErrorAlert, Loading, Page, PageHeader, Surface } from '@/components/app/page'
@@ -79,6 +80,7 @@ export function SettingsPage() {
           )}
         </Surface>
       </section>
+      <BackupDestinationsSection />
       <AccountDialog account={editing} onClose={() => setEditing(null)} />
       <Confirm
         open={deleting !== null}

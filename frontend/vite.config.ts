@@ -11,7 +11,14 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': { target: 'http://127.0.0.1:9120', changeOrigin: true },
+      '/api': {
+        target: 'http://127.0.0.1:9120',
+        changeOrigin: true,
+        // Container terminals are WebSockets. The backend checks their Origin
+        // against the host, which changeOrigin rewrites, so pass the original.
+        ws: true,
+        configure: (proxy) => proxy.on('proxyReqWs', (req, incoming) => req.setHeader('x-forwarded-host', incoming.headers.host ?? '')),
+      },
     },
   },
 })

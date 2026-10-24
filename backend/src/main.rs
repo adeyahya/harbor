@@ -1,6 +1,8 @@
 mod assets;
 mod accounts;
 mod auth;
+mod backup_destinations;
+mod backups;
 mod canvas;
 mod deployments;
 mod docker;
@@ -12,6 +14,7 @@ mod process;
 mod stacks;
 mod state;
 mod system;
+mod terminal;
 mod updates;
 mod volume_browser;
 
@@ -77,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
         helpers: Default::default(),
     };
     volume_browser::init(&state).await;
+    backups::init(&state).await;
 
     deployments::spawn_poller(state.clone());
 
@@ -89,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/canvas", canvas::router())
         .nest("/settings/git-accounts", accounts::router())
         .nest("/import", import::router())
+        .nest("/backups", backups::router())
         .nest("/updates", updates::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_user));
 

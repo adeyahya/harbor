@@ -39,11 +39,20 @@ design, compiled into the backend binary.
   deployment's own ports, variables and volumes, so production gets what staging
   tested. See [Staging and production](#staging-and-production).
 - **Containers**: list, start/stop/restart/remove, live log streaming, inspect.
+- **Terminal**: open a shell in any running container (Containers, or the
+  Terminal tab of a deployment or stack), with bash or sh picked automatically
+  and an optional user to run as. Each session is recorded in Activity (who,
+  which shell, how long, never what was typed) and can be ended from there.
 - **Images, volumes, networks**: list, remove, prune. Click a volume to browse its
   files read-only: folders, text previews, image previews and downloads. Harbor
   reads volumes through a small `alpine` helper container (pulled on first use,
   removed after 10 minutes idle, hidden from Harbor's lists), so it works
   even when volume data lives in a VM, as with Docker Desktop.
+- **Volume backups**: schedule backups of a volume to **Google Drive**, a
+  **local folder**, or any **rclone** remote (S3, Backblaze B2, Dropbox,
+  OneDrive, SFTP, …). Keeps the last N, can stop the containers using the
+  volume while archiving, and restores into the same or a new volume. See
+  [Volume backups](#volume-backups).
 - **Git accounts** (Settings): credentials stored once and used by every
   git-backed service. Services use the account for their repository's host
   automatically, or a specific one, or none.
@@ -148,7 +157,11 @@ port mapping there.
 ### Reverse proxy and webhooks
 
 Any reverse proxy works. Live logs stream over server-sent events, so turn off
-response buffering for Harbor. For example, with Caddy:
+response buffering for Harbor, and container terminals use WebSockets, so the
+proxy must pass `Upgrade` requests through (Caddy does by default; nginx needs
+`proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`).
+Terminals check the browser's `Origin` against the `Host` (or
+`X-Forwarded-Host`) header, so keep the original host when proxying. For example, with Caddy:
 
 ```
 harbor.example.com {
@@ -169,7 +182,8 @@ git pull && docker compose up -d --build
 Database migrations run automatically at startup. Everything Harbor stores is
 in the data directory: back up `harbor.db` (stop Harbor first, or use
 `sqlite3 harbor.db ".backup backup.db"`) and the `stacks/` folder. Volumes and
-images used by your services live in Docker as usual.
+images used by your services live in Docker as usual; back up volumes with
+[Volume backups](#volume-backups).
 
 ## Development
 
@@ -233,6 +247,64 @@ can read the compose files and run the stacks from there:
 volumes:
   - /etc/komodo:/etc/komodo
 ```
+
+## Volume backups
+
+1. **Settings → Backup destinations → Add destination**:
+   - **Google Drive**: see [below](#google-drive) for the one-time client
+     setup, then click **Connect** and sign in.
+   - **Local folder**: an absolute path as Harbor sees it. In Docker, use a
+     folder under the data directory (e.g. `/var/lib/harbor/backups`) or mount
+     another disk into Harbor's container.
+   - **rclone remote**: paste remotes in `rclone.conf` format (e.g. from
+     `rclone config show myremote`) and a path like `myremote:bucket/harbor`.
+     Harbor runs `rclone/rclone` in a helper container, so nothing needs to be
+     installed. The config is stored in Harbor's database.
+   **Test** checks that the destination is reachable and writable.
+2. Open a volume (**Volumes → *name* → Backups**) and **Add schedule**: pick
+   the destination, when to run (presets or any cron expression, in the
+   server's time zone; set `TZ` and mount `/etc/localtime` to change it), how
+   many backups to keep, and whether to stop the containers using the volume
+   while it's archived. Stopping them is recommended for databases, which can
+   otherwise be copied mid-write. **Back up now** makes a one-off backup.
+3. **Restore** downloads a backup and replaces the volume's contents with it,
+   optionally stopping its containers meanwhile. The archive is extracted to a
+   staging folder first, so a damaged backup leaves the volume untouched. Pick
+   another volume name to restore into a new volume instead.
+
+Backups are `<volume>-<UTC timestamp>.tar.gz` archives of the volume's
+contents, made by a short-lived `alpine` helper container (so this works when
+volume data lives in a VM). Each archive is staged in `<data dir>/backups/tmp`
+before upload, so that disk needs room for the largest one. Every run is an
+update in Activity with its full log. A run missed while Harbor was down
+happens once when it starts again.
+
+### Google Drive
+
+Google requires each self-hosted app to use its own OAuth client. Once:
+
+1. In the [Google Cloud console](https://console.cloud.google.com/projectcreate),
+   create a project and enable the
+   [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com).
+2. Configure the [OAuth consent screen](https://console.cloud.google.com/auth/branding)
+   (External) and **publish** the app under *Audience*. Apps left in testing
+   lose access after 7 days. Harbor only asks for the `drive.file` scope
+   (files it created itself), so publishing needs no verification.
+3. Under [Clients](https://console.cloud.google.com/auth/clients), create a
+   client:
+   - **Web application**, if you open Harbor over https (or on localhost), with
+     the authorized redirect URI
+     `https://<harbor-host>/api/backups/destinations/google/callback`. Google
+     sends you back to Harbor after you sign in.
+   - **Desktop app** otherwise. After you sign in Google opens
+     `http://localhost/?…&code=…`, which won't load; paste that address into
+     Harbor.
+4. Add the destination in Harbor with the client ID and secret, then
+   **Connect**.
+
+Backups go in a Drive folder (default *Harbor backups*), uploaded with resumable
+uploads that survive dropped connections. The refresh token and client secret
+are stored in Harbor's database and never sent to the browser.
 
 ## Deploying from GitHub
 
@@ -313,6 +385,9 @@ backend/
     canvas.rs      canvas groups and pinning
     accounts.rs    git accounts and token resolution
     volume_browser.rs  read-only volume file browser (helper container)
+    terminal.rs    container shells over WebSocket
+    backups.rs     volume backup schedules, archiving and restoring
+    backup_destinations.rs  Google Drive, local folder and rclone targets
     docker.rs      containers, logs (SSE), images, volumes, networks
     system.rs      host stats collector
     assets.rs      embedded frontend

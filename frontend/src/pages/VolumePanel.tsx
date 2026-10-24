@@ -3,6 +3,7 @@ import { ArrowLeft, ChevronRight, Download, File, FileText, Folder, HardDrive, I
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { api, type VolumeDetail, type VolumeEntry, type VolumeFilePreview, type VolumeListing } from '@/api'
+import { VolumeBackups } from '@/components/app/backups'
 import { EmptyState, ErrorAlert, Loading } from '@/components/app/page'
 import { ServicePanel, usePanelTab } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
@@ -11,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { bytes, timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-const TABS = ['files', 'details'] as const
+const TABS = ['files', 'backups', 'details'] as const
 const IMAGE = /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i
 
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name)
@@ -34,9 +35,11 @@ function VolumePanelInner({ name }: { name: string }) {
       title={name}
       subtitle={
         <>
-          <span className="flex items-center gap-1 text-xs">
-            <Lock className="size-3" /> Read-only
-          </span>
+          {tab === 'files' && (
+            <span className="flex items-center gap-1 text-xs">
+              <Lock className="size-3" /> Read-only
+            </span>
+          )}
           {detail.data && (
             <span>
               {used.length ? `Used by ${used.map((u) => u.name).join(', ')}` : 'Not used by any container'}
@@ -46,12 +49,14 @@ function VolumePanelInner({ name }: { name: string }) {
       }
       tabs={[
         { id: 'files', label: 'Files' },
+        { id: 'backups', label: 'Backups' },
         { id: 'details', label: 'Details' },
       ]}
       tab={tab}
       onTabChange={setTab}
     >
       {tab === 'files' && <Explorer volume={name} />}
+      {tab === 'backups' && <VolumeBackups volume={name} />}
       {tab === 'details' &&
         (detail.isLoading ? (
           <Loading />

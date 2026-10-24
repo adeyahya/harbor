@@ -6,6 +6,7 @@ import { api, type ContainerInspect, type ContainerSummary } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { ContainerDetails, ContainersTable, ContainerMenu } from '@/components/app/containers'
 import { LogViewer } from '@/components/app/LogViewer'
+import { Terminal } from '@/components/app/Terminal'
 import { EmptyState, ErrorAlert, Loading, Page, PageHeader, Surface } from '@/components/app/page'
 import { ServicePanel, usePanelTab } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
@@ -75,7 +76,7 @@ export function ContainersPage() {
   )
 }
 
-const TABS = ['logs', 'details', 'inspect'] as const
+const TABS = ['logs', 'terminal', 'details', 'inspect'] as const
 
 export function ContainerPanel() {
   const { id = '' } = useParams()
@@ -104,6 +105,7 @@ export function ContainerPanel() {
       }
       tabs={[
         { id: 'logs', label: 'Logs' },
+        { id: 'terminal', label: 'Terminal' },
         { id: 'details', label: 'Details' },
         { id: 'inspect', label: 'Inspect' },
       ]}
@@ -118,6 +120,7 @@ export function ContainerPanel() {
       ) : (
         <>
           {tab === 'logs' && <LogViewer containerId={data.Id} className="h-[calc(100vh-15rem)] min-h-96" />}
+          {tab === 'terminal' && <Terminal containerId={data.Id} running={data.State.Running} className="h-[calc(100vh-15rem)] min-h-96" />}
           {tab === 'details' && <ContainerDetails c={data} />}
           {tab === 'inspect' && <pre className="scrollbar-thin overflow-auto rounded-xl border bg-log p-4 font-mono text-[12px] leading-5">{JSON.stringify(data, null, 2)}</pre>}
         </>

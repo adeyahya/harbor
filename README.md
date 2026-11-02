@@ -1,9 +1,37 @@
 # Harbor
 
-A self-hosted dashboard for deploying and managing Docker workloads on a single
-server, inspired by [Komodo](https://komo.do). The backend is Rust (axum + SQLite
-+ the Docker API), and the frontend is React + shadcn/ui with a Railway-inspired
-design, compiled into the backend binary.
+A self-hosted dashboard for deploying and managing Docker workloads on a single server. The Rust (axum) backend stores state in SQLite, talks to the Docker Engine API, and serves an embedded React frontend from the same binary.
+
+[![CI](https://github.com/adeyahya/harbor/actions/workflows/ci.yml/badge.svg)](https://github.com/adeyahya/harbor/actions/workflows/ci.yml)
+
+Inspired by [Komodo](https://komo.do), with a Railway-like canvas for stacks, git-built containers, rollbacks, promotion between environments, and scheduled volume backups.
+
+## Screenshots
+
+Add captures of the canvas, a deployment panel, and the container terminal under [`docs/screenshots/`](docs/screenshots/) and uncomment the lines below. Keep hostnames, account names, and anything from a real server out of the images.
+
+<!--
+![Canvas](docs/screenshots/canvas.png)
+![Deployment panel](docs/screenshots/deployment.png)
+![Terminal](docs/screenshots/terminal.png)
+-->
+
+_Screenshots are not in the repository yet._
+
+## Quick start
+
+Docker is the only requirement. The Compose file builds the image, mounts the engine socket, and stores Harbor's database under `/var/lib/harbor`.
+
+```bash
+git clone https://github.com/adeyahya/harbor.git
+cd harbor
+sudo mkdir -p /var/lib/harbor
+docker compose up -d --build
+```
+
+Open http://127.0.0.1:9120 and create the admin account. Change `hostname:` in [`compose.yaml`](compose.yaml) if you want the canvas to show the server's name instead of `my-server`.
+
+Tagged releases are published to `ghcr.io/adeyahya/harbor` (the tag, and `latest`). Pull requests and `main` only build the image; they do not push it. See [Running Harbor in Docker](#running-harbor-in-docker) for the socket mount, the data directory, and host networking.
 
 ## Features
 
@@ -63,24 +91,81 @@ design, compiled into the backend binary.
   streamed live while it runs.
 - **Auth**: the first visit creates an admin account. Sessions use an httpOnly cookie.
 
-Not yet implemented (Komodo has them): multiple servers, git-backed stacks,
-procedures/actions, GitOps resource sync, alerting.
+## Architecture
 
-## Requirements
+The browser talks only to Harbor. The React app is built with Vite and embedded in the binary at compile time (`rust-embed`), so there is no separate frontend process in production. axum serves that UI, the JSON API, server-sent log streams, and the terminal WebSocket. SQLite holds users, sessions, deployments, stacks, activity, and backup settings. Deployments and stacks are applied by calling the Docker Engine API (bollard) and, for Compose and image builds, the `docker` and `git` binaries.
 
-To run Harbor in Docker you only need Docker itself (see
-[Running Harbor in Docker](#running-harbor-in-docker)). To build and run it
-directly on the host:
+```mermaid
+flowchart TB
+  subgraph browser [Browser]
+    React[React UI]
+  end
 
-- Rust (stable), Node 20+ and pnpm
-- Docker with the Compose plugin (`docker compose`), and `git`
+  subgraph harbor [Harbor binary]
+    Assets[Embedded frontend assets]
+    Axum[axum HTTP and WebSocket API]
+    DB[(SQLite)]
+  end
 
-Harbor connects to the same engine as your `docker` CLI: `DOCKER_HOST` if set,
-otherwise the active `docker context` (for example Docker Desktop on macOS).
+  React --> Axum
+  Axum --> Assets
+  Axum --> DB
+  Axum --> Engine[Docker Engine API]
+  Axum --> Tools[git and docker CLI]
+  Engine --> Host[Host containers, images, volumes, networks]
+  Tools --> Host
+```
 
-## Running
+| Piece | Where |
+| --- | --- |
+| HTTP API, sessions, background deploys | `backend/src` (axum, tokio) |
+| Schema | `backend/migrations` (applied on startup) |
+| UI | `frontend/src` (React, Vite, shadcn/ui) |
+| Image | [`Dockerfile`](Dockerfile) multi-stage build, [`compose.yaml`](compose.yaml) |
+| CI | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (Rust and frontend), [`.github/workflows/docker.yml`](.github/workflows/docker.yml) (image, push to GHCR on tags) |
 
-Build the frontend once, then run the backend, which serves it:
+## Configuration
+
+| Variable          | Default          | Description                                  |
+| ----------------- | ---------------- | -------------------------------------------- |
+| `HARBOR_ADDR`     | `127.0.0.1:9120` | Listen address. Use `0.0.0.0:9120` to expose (the Docker image does). |
+| `HARBOR_DATA_DIR` | `./data`         | SQLite database and stack files (`/var/lib/harbor` in the Docker image). |
+| `DOCKER_HOST`     | active context   | Docker engine to manage (`unix:///var/run/docker.sock` in the Docker image). |
+| `HARBOR_GIT_POLL_SECS` | `60`        | How often auto-deploy checks branches for new commits. `0` disables polling. |
+| `HARBOR_HELPER_IDLE_SECS` | `600`    | How long an idle volume-browser helper container is kept. |
+| `RUST_LOG`        | `harbor=info`    | Log filter.                                  |
+
+Harbor connects to the same engine as your `docker` CLI: `DOCKER_HOST` if set, otherwise the active `docker context` (for example Docker Desktop on macOS).
+
+Git tokens, webhook secrets, and backup credentials are not environment variables. They are written to the SQLite database through the UI and are not returned to the browser.
+
+## Security
+
+Harbor controls the Docker engine, which is root-equivalent on the host. An admin session is comparable to SSH on that machine.
+
+- Do not publish port 9120 on the public internet without a TLS reverse proxy. Prefer a private network or VPN. Details are in [Running Harbor in Docker](#running-harbor-in-docker) and [Reverse proxy and webhooks](#reverse-proxy-and-webhooks).
+- The first visitor creates the only admin account. The session cookie is httpOnly. There are no extra roles.
+- The database under `HARBOR_DATA_DIR` holds password hashes and third-party secrets (git tokens, Google OAuth client secrets and refresh tokens, rclone configs). Back it up like a password store, and do not commit it. `.gitignore` ignores `data/`, `*.db`, `*.sqlite`, and `.env` files.
+- GitHub push webhooks are verified with HMAC-SHA256 (`X-Hub-Signature-256`). Container terminals require the WebSocket `Origin` to match Harbor's host.
+- Report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
+
+## Development
+
+Rust 1.98 (see [`rust-toolchain.toml`](rust-toolchain.toml)), Node.js 22, and pnpm 11. Docker with the Compose plugin and `git` are needed to actually deploy.
+
+Run the backend and the Vite dev server in two terminals. Vite proxies `/api` to the backend and hot-reloads the UI:
+
+```bash
+cd backend && cargo run
+```
+
+```bash
+cd frontend && pnpm install && pnpm dev
+```
+
+Then open http://localhost:5173.
+
+To build the UI into the binary and run a release build on the host:
 
 ```bash
 cd frontend && pnpm install && pnpm build
@@ -89,6 +174,8 @@ cd ../backend && cargo run --release
 
 Open http://127.0.0.1:9120 and create your admin account.
 
+The checks CI runs are listed in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Running Harbor in Docker
 
 The repository ships a multi-stage `Dockerfile` (it builds the UI and the Rust
@@ -96,7 +183,8 @@ binary, then copies them into a slim Debian image with `git` and the Docker CLI,
 Compose and Buildx) and a `compose.yaml` that runs it.
 
 ```bash
-git clone <this repo> harbor && cd harbor
+git clone https://github.com/adeyahya/harbor.git
+cd harbor
 sudo mkdir -p /var/lib/harbor
 docker compose up -d --build
 ```
@@ -185,31 +273,7 @@ in the data directory: back up `harbor.db` (stop Harbor first, or use
 images used by your services live in Docker as usual; back up volumes with
 [Volume backups](#volume-backups).
 
-## Development
-
-Run the backend and the Vite dev server in two terminals. Vite proxies `/api` to
-the backend and hot-reloads the UI:
-
-```bash
-cd backend && cargo run
-```
-
-```bash
-cd frontend && pnpm dev
-```
-
-Then open http://localhost:5173.
-
-## Configuration
-
-| Variable          | Default          | Description                                  |
-| ----------------- | ---------------- | -------------------------------------------- |
-| `HARBOR_ADDR`     | `127.0.0.1:9120` | Listen address. Use `0.0.0.0:9120` to expose (the Docker image does). |
-| `HARBOR_DATA_DIR` | `./data`         | SQLite database and stack files (`/var/lib/harbor` in the Docker image). |
-| `DOCKER_HOST`     | active context   | Docker engine to manage (`unix:///var/run/docker.sock` in the Docker image). |
-| `HARBOR_GIT_POLL_SECS` | `60`        | How often auto-deploy checks branches for new commits. `0` disables polling. |
-| `HARBOR_HELPER_IDLE_SECS` | `600`    | How long an idle volume-browser helper container is kept. |
-| `RUST_LOG`        | `harbor=info`    | Log filter.                                  |
+On a tag, GitHub Actions pushes `ghcr.io/adeyahya/harbor:<tag>` and `:latest`. To run a published image instead of building locally, set `image:` in `compose.yaml` and drop the `build:` key.
 
 ## Moving from Komodo
 
@@ -304,7 +368,8 @@ Google requires each self-hosted app to use its own OAuth client. Once:
 
 Backups go in a Drive folder (default *Harbor backups*), uploaded with resumable
 uploads that survive dropped connections. The refresh token and client secret
-are stored in Harbor's database and never sent to the browser.
+are stored in Harbor's database and never sent to the browser. Do not put the
+client secret in this repository or in a committed `.env` file.
 
 ## Deploying from GitHub
 
@@ -337,9 +402,6 @@ Rolling back after the target image has been removed fails with a clear error
 and leaves the running container alone. A rollback doesn't change what
 auto-deploy considers "seen", so it won't immediately redeploy the newer
 commit, but the next push deploys as usual.
-
-Harbor controls your Docker engine, which is root-equivalent on the host. Only
-expose it on a trusted network or behind a TLS reverse proxy.
 
 ## Staging and production
 
@@ -399,3 +461,18 @@ frontend/
                    variables editor, command menu, action tray
     pages/         canvas, service panels, Docker resource pages
 ```
+
+## Roadmap
+
+Not built yet, and present in Komodo:
+
+- Multiple servers, instead of the one engine Harbor is attached to
+- Procedures and one-off actions
+- GitOps sync of resources from a repository
+- Alerting
+
+Git-backed stacks, promotion between environments, container terminals, and scheduled volume backups are already in.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The project is licensed under the [MIT License](LICENSE). Copyright Ade Yahya.

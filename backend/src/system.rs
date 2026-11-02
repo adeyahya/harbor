@@ -40,7 +40,9 @@ pub fn spawn_collector(stats: Arc<RwLock<HostStats>>) {
             let (disk_total, disk_avail) = disks
                 .iter()
                 .filter(|d| seen.insert(d.name().to_os_string()))
-                .fold((0, 0), |(t, a), d| (t + d.total_space(), a + d.available_space()));
+                .fold((0, 0), |(t, a), d| {
+                    (t + d.total_space(), a + d.available_space())
+                });
             let load = System::load_average();
 
             *stats.write().await = HostStats {

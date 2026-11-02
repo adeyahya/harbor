@@ -52,28 +52,58 @@ pub fn display_repo(url: &str) -> String {
 /// it never appears in the URL, `.git/config`, `ps`, or git's error output.
 fn git(token: &str) -> Command {
     let mut cmd = Command::new("git");
-    cmd.env("GIT_TERMINAL_PROMPT", "0").env("GIT_ASKPASS", "true");
+    cmd.env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "true");
     if !token.is_empty() {
-        let basic = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
+        let basic =
+            base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
         cmd.env("GIT_CONFIG_COUNT", "1")
             .env("GIT_CONFIG_KEY_0", "http.extraHeader")
-            .env("GIT_CONFIG_VALUE_0", format!("Authorization: Basic {basic}"));
+            .env(
+                "GIT_CONFIG_VALUE_0",
+                format!("Authorization: Basic {basic}"),
+            );
     }
     cmd
 }
 
 /// Shallow-clones `branch` into `dest` (replacing it) and returns its head commit.
-pub async fn clone(log: &UpdateLog, url: &str, branch: &str, token: &str, dest: &Path) -> anyhow::Result<Commit> {
+pub async fn clone(
+    log: &UpdateLog,
+    url: &str,
+    branch: &str,
+    token: &str,
+    dest: &Path,
+) -> anyhow::Result<Commit> {
     if dest.exists() {
-        tokio::fs::remove_dir_all(dest).await.context("clearing previous checkout")?;
+        tokio::fs::remove_dir_all(dest)
+            .await
+            .context("clearing previous checkout")?;
     }
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
     let mut cmd = git(token);
-    cmd.args(["clone", "--depth", "1", "--single-branch", "--branch", branch, "--", url])
-        .arg(dest);
-    process::run(log, cmd, &format!("git clone --depth 1 --branch {branch} {}", display_repo(url))).await?;
+    cmd.args([
+        "clone",
+        "--depth",
+        "1",
+        "--single-branch",
+        "--branch",
+        branch,
+        "--",
+        url,
+    ])
+    .arg(dest);
+    process::run(
+        log,
+        cmd,
+        &format!(
+            "git clone --depth 1 --branch {branch} {}",
+            display_repo(url)
+        ),
+    )
+    .await?;
 
     let mut rev = git(token);
     rev.args(["log", "-1", "--format=%H%n%s"]).current_dir(dest);
@@ -103,9 +133,17 @@ pub async fn remote_head(url: &str, branch: &str, token: &str) -> anyhow::Result
 /// Untracked and ignored files are left alone (no `git clean`): for stacks the
 /// checkout is the compose project directory and may hold data next to the
 /// code. Local edits to tracked files are discarded, and listed in the log.
-pub async fn sync_checkout(log: &UpdateLog, dir: &Path, url: &str, branch: &str, token: &str) -> anyhow::Result<Commit> {
+pub async fn sync_checkout(
+    log: &UpdateLog,
+    dir: &Path,
+    url: &str,
+    branch: &str,
+    token: &str,
+) -> anyhow::Result<Commit> {
     if !dir.join(".git").exists() {
-        let has_files = std::fs::read_dir(dir).map(|mut d| d.next().is_some()).unwrap_or(false);
+        let has_files = std::fs::read_dir(dir)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
         if has_files {
             anyhow::bail!("{} exists but isn't a git checkout", dir.display());
         }
@@ -116,20 +154,40 @@ pub async fn sync_checkout(log: &UpdateLog, dir: &Path, url: &str, branch: &str,
 
 /// Fetches `rev` (a branch or commit) from `url` into an existing checkout and
 /// resets to it.
-pub async fn fetch_and_reset(log: &UpdateLog, dir: &Path, url: &str, rev: &str, token: &str) -> anyhow::Result<Commit> {
+pub async fn fetch_and_reset(
+    log: &UpdateLog,
+    dir: &Path,
+    url: &str,
+    rev: &str,
+    token: &str,
+) -> anyhow::Result<Commit> {
     let mut status = git(token);
-    status.args(["status", "--porcelain", "--untracked-files=no"]).current_dir(dir);
+    status
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(dir);
     let dirty = process::output(status).await.unwrap_or_default();
     if !dirty.is_empty() {
-        log.line(format!("discarding local changes to tracked files:\n{dirty}")).await;
+        log.line(format!(
+            "discarding local changes to tracked files:\n{dirty}"
+        ))
+        .await;
     }
     // Fetch from the configured URL rather than `origin`, which may point at
     // another host or carry stale embedded credentials.
     let mut fetch = git(token);
-    fetch.args(["fetch", "--depth", "1", "--", url, rev]).current_dir(dir);
-    process::run(log, fetch, &format!("git fetch --depth 1 {} {rev}", display_repo(url))).await?;
+    fetch
+        .args(["fetch", "--depth", "1", "--", url, rev])
+        .current_dir(dir);
+    process::run(
+        log,
+        fetch,
+        &format!("git fetch --depth 1 {} {rev}", display_repo(url)),
+    )
+    .await?;
     let mut reset = git(token);
-    reset.args(["reset", "--hard", "FETCH_HEAD"]).current_dir(dir);
+    reset
+        .args(["reset", "--hard", "FETCH_HEAD"])
+        .current_dir(dir);
     process::run(log, reset, "git reset --hard FETCH_HEAD").await?;
     head(dir).await
 }
@@ -176,13 +234,19 @@ pub async fn repo_info(dir: &Path) -> Option<RepoInfo> {
     url.args(["remote", "get-url", "origin"]).current_dir(dir);
     let url = process::output(url).await.ok()?;
     let mut branch = git("");
-    branch.args(["rev-parse", "--abbrev-ref", "HEAD"]).current_dir(dir);
+    branch
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir);
     let branch = process::output(branch).await.unwrap_or_default();
     let (url, had_credentials) = strip_credentials(&url);
     Some(RepoInfo {
         root,
         url,
-        branch: if branch == "HEAD" { String::new() } else { branch },
+        branch: if branch == "HEAD" {
+            String::new()
+        } else {
+            branch
+        },
         had_credentials,
     })
 }
@@ -203,10 +267,13 @@ pub async fn resolve_branch(url: &str, branch: &str, token: &str) -> Result<Stri
     if !branch.trim().is_empty() {
         return Ok(branch.trim().to_string());
     }
-    tokio::time::timeout(std::time::Duration::from_secs(20), default_branch(url, token))
-        .await
-        .map_err(|_| "timed out contacting the repository".to_string())?
-        .map_err(|e| format!("couldn't reach the repository: {e:#}"))
+    tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        default_branch(url, token),
+    )
+    .await
+    .map_err(|_| "timed out contacting the repository".to_string())?
+    .map_err(|e| format!("couldn't reach the repository: {e:#}"))
 }
 
 /// Outcome of a GitHub webhook delivery.
@@ -226,7 +293,12 @@ pub fn parse_push(
     auto_deploy: bool,
     last_seen: &str,
 ) -> Result<Push, ()> {
-    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or_default();
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+    };
     if secret.is_empty() || !verify_signature(secret, body, header("x-hub-signature-256")) {
         return Err(());
     }
@@ -261,7 +333,11 @@ pub async fn default_branch(url: &str, token: &str) -> anyhow::Result<String> {
     cmd.args(["ls-remote", "--symref", "--", url, "HEAD"]);
     let out = process::output(cmd).await?;
     out.lines()
-        .find_map(|l| l.strip_prefix("ref: refs/heads/")?.split_once('\t').map(|(b, _)| b.to_string()))
+        .find_map(|l| {
+            l.strip_prefix("ref: refs/heads/")?
+                .split_once('\t')
+                .map(|(b, _)| b.to_string())
+        })
         .ok_or_else(|| anyhow::anyhow!("couldn't determine the repository's default branch"))
 }
 
@@ -271,56 +347,68 @@ pub fn validate_rel_path(path: &str, what: &str) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err(format!("{what} is required"));
     }
-    if p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir | Component::Prefix(_))) {
-        return Err(format!("{what} must be a relative path inside the repository"));
+    if p.is_absolute()
+        || p.components()
+            .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
+    {
+        return Err(format!(
+            "{what} must be a relative path inside the repository"
+        ));
     }
     Ok(())
 }
 
+/// Arguments for `docker build` of a checkout. Grouped so the build call
+/// stays readable as options are added.
+pub struct ImageBuild<'a> {
+    pub checkout: &'a Path,
+    pub context: &'a str,
+    pub dockerfile: &'a str,
+    pub build_args: &'a [String],
+    pub tags: &'a [String],
+    pub labels: &'a [String],
+    pub pull: bool,
+}
+
 /// Builds the image with the Dockerfile at `<context>/<dockerfile>`, tagging
 /// it with each of `tags`.
-pub async fn build(
-    log: &UpdateLog,
-    checkout: &Path,
-    context: &str,
-    dockerfile: &str,
-    build_args: &[String],
-    tags: &[String],
-    labels: &[String],
-    pull: bool,
-) -> anyhow::Result<()> {
-    validate_rel_path(context, "root directory").map_err(anyhow::Error::msg)?;
-    validate_rel_path(dockerfile, "Dockerfile path").map_err(anyhow::Error::msg)?;
-    let file = Path::new(context).join(dockerfile);
-    if !checkout.join(&file).is_file() {
+pub async fn build(log: &UpdateLog, build: ImageBuild<'_>) -> anyhow::Result<()> {
+    validate_rel_path(build.context, "root directory").map_err(anyhow::Error::msg)?;
+    validate_rel_path(build.dockerfile, "Dockerfile path").map_err(anyhow::Error::msg)?;
+    let file = Path::new(build.context).join(build.dockerfile);
+    if !build.checkout.join(&file).is_file() {
         anyhow::bail!("no Dockerfile at {} in the repository", file.display());
     }
 
     let mut cmd = Command::new("docker");
     cmd.arg("build").arg("-f").arg(&file);
     // Check the registry for newer base images instead of using local ones.
-    if pull {
+    if build.pull {
         cmd.arg("--pull");
     }
-    for tag in tags {
+    for tag in build.tags {
         cmd.args(["-t", tag]);
     }
-    for arg in build_args {
+    for arg in build.build_args {
         cmd.args(["--build-arg", arg]);
     }
-    for label in labels {
+    for label in build.labels {
         cmd.args(["--label", label]);
     }
-    cmd.arg(context)
-        .current_dir(checkout)
+    cmd.arg(build.context)
+        .current_dir(build.checkout)
         .env("DOCKER_BUILDKIT", "1")
         .env("BUILDKIT_PROGRESS", "plain");
     let shown = format!(
         "docker build{} -f {} {}{}",
-        if pull { " --pull" } else { "" },
+        if build.pull { " --pull" } else { "" },
         file.display(),
-        tags.iter().map(|t| format!("-t {t} ")).collect::<String>(),
-        context
+        build
+            .tags
+            .iter()
+            .map(|t| format!("-t {t} "))
+            .collect::<String>(),
+        build.context
     );
     process::run(log, cmd, &shown).await
 }
@@ -348,19 +436,43 @@ mod tests {
     #[test]
     fn normalizes_urls() {
         assert_eq!(normalize_url("acme/api"), "https://github.com/acme/api.git");
-        assert_eq!(normalize_url(" acme/api.git "), "https://github.com/acme/api.git");
-        assert_eq!(normalize_url("https://gitlab.com/a/b.git"), "https://gitlab.com/a/b.git");
-        assert_eq!(normalize_url("git@github.com:a/b.git"), "git@github.com:a/b.git");
-        assert_eq!(normalize_url("file:///tmp/repo.git"), "file:///tmp/repo.git");
+        assert_eq!(
+            normalize_url(" acme/api.git "),
+            "https://github.com/acme/api.git"
+        );
+        assert_eq!(
+            normalize_url("https://gitlab.com/a/b.git"),
+            "https://gitlab.com/a/b.git"
+        );
+        assert_eq!(
+            normalize_url("git@github.com:a/b.git"),
+            "git@github.com:a/b.git"
+        );
+        assert_eq!(
+            normalize_url("file:///tmp/repo.git"),
+            "file:///tmp/repo.git"
+        );
         assert_eq!(display_repo("https://github.com/acme/api.git"), "acme/api");
     }
 
     #[test]
     fn strips_url_credentials() {
-        assert_eq!(strip_credentials("https://ghp_x@github.com/a/b.git"), ("https://github.com/a/b.git".into(), true));
-        assert_eq!(strip_credentials("https://u:p@github.com/a/b"), ("https://github.com/a/b".into(), true));
-        assert_eq!(strip_credentials("https://github.com/a/b.git"), ("https://github.com/a/b.git".into(), false));
-        assert_eq!(strip_credentials("git@github.com:a/b.git"), ("git@github.com:a/b.git".into(), false));
+        assert_eq!(
+            strip_credentials("https://ghp_x@github.com/a/b.git"),
+            ("https://github.com/a/b.git".into(), true)
+        );
+        assert_eq!(
+            strip_credentials("https://u:p@github.com/a/b"),
+            ("https://github.com/a/b".into(), true)
+        );
+        assert_eq!(
+            strip_credentials("https://github.com/a/b.git"),
+            ("https://github.com/a/b.git".into(), false)
+        );
+        assert_eq!(
+            strip_credentials("git@github.com:a/b.git"),
+            ("git@github.com:a/b.git".into(), false)
+        );
     }
 
     #[test]

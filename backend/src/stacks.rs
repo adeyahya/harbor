@@ -61,7 +61,8 @@ pub struct Stack {
 
 impl Stack {
     async fn token(&self, db: &sqlx::SqlitePool) -> String {
-        crate::accounts::resolve_token(db, &self.git_url, self.git_account_id, &self.git_token).await
+        crate::accounts::resolve_token(db, &self.git_url, self.git_account_id, &self.git_token)
+            .await
     }
 }
 
@@ -204,7 +205,10 @@ async fn list(State(state): State<AppState>) -> AppResult<Json<Vec<StackListItem
     Ok(Json(items))
 }
 
-async fn detail(State(state): State<AppState>, Path(name): Path<String>) -> AppResult<Json<StackDetail>> {
+async fn detail(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> AppResult<Json<StackDetail>> {
     let stack = fetch(&state, &name).await?;
     let mut containers = containers_with_label(&state.docker, &project_label(&name)).await?;
     containers.sort_by(|a, b| a.names.cmp(&b.names));
@@ -219,7 +223,9 @@ async fn detail(State(state): State<AppState>, Path(name): Path<String>) -> AppR
 async fn prepare(state: &AppState, input: &mut StackInput, stored_token: &str) -> AppResult<()> {
     input.project_dir = input.project_dir.trim().to_string();
     if !input.project_dir.is_empty() && !FsPath::new(&input.project_dir).is_absolute() {
-        return Err(AppError::bad_request("project directory must be an absolute path"));
+        return Err(AppError::bad_request(
+            "project directory must be an absolute path",
+        ));
     }
     match input.source.as_str() {
         "inline" => {}
@@ -229,7 +235,13 @@ async fn prepare(state: &AppState, input: &mut StackInput, stored_token: &str) -
                 return Err(AppError::bad_request("repository URL is required"));
             }
             let fallback = input.git_token.as_deref().unwrap_or(stored_token);
-            let token = crate::accounts::resolve_token(&state.db, &input.git_url, input.git_account_id, fallback).await;
+            let token = crate::accounts::resolve_token(
+                &state.db,
+                &input.git_url,
+                input.git_account_id,
+                fallback,
+            )
+            .await;
             input.git_branch = git::resolve_branch(&input.git_url, &input.git_branch, &token)
                 .await
                 .map_err(AppError::bad_request)?;
@@ -237,7 +249,8 @@ async fn prepare(state: &AppState, input: &mut StackInput, stored_token: &str) -
                 return Err(AppError::bad_request("invalid branch name"));
             }
             input.compose_path = input.compose_path.trim().to_string();
-            git::validate_rel_path(&input.compose_path, "compose file path").map_err(AppError::bad_request)?;
+            git::validate_rel_path(&input.compose_path, "compose file path")
+                .map_err(AppError::bad_request)?;
         }
         other => return Err(AppError::bad_request(format!("unknown source '{other}'"))),
     }
@@ -272,7 +285,10 @@ pub async fn insert(state: &AppState, mut input: StackInput) -> AppResult<Stack>
     .await?)
 }
 
-async fn create(State(state): State<AppState>, Json(input): Json<StackInput>) -> AppResult<Json<Stack>> {
+async fn create(
+    State(state): State<AppState>,
+    Json(input): Json<StackInput>,
+) -> AppResult<Json<Stack>> {
     Ok(Json(insert(&state, input).await?))
 }
 
@@ -332,7 +348,10 @@ async fn action(
     Extension(user): Extension<User>,
     Path((name, action)): Path<(String, String)>,
 ) -> AppResult<Json<Update>> {
-    if !matches!(action.as_str(), "deploy" | "pull" | "start" | "stop" | "restart" | "down") {
+    if !matches!(
+        action.as_str(),
+        "deploy" | "pull" | "start" | "stop" | "restart" | "down"
+    ) {
         return Err(AppError::bad_request(format!("unknown action '{action}'")));
     }
     let stack = fetch(&state, &name).await?;
@@ -373,7 +392,9 @@ impl Layout {
     fn project_dir(&self, stack: &Stack) -> PathBuf {
         if stack.source == "git" {
             let file = self.compose_file(stack);
-            file.parent().map(FsPath::to_path_buf).unwrap_or_else(|| self.checkout.clone())
+            file.parent()
+                .map(FsPath::to_path_buf)
+                .unwrap_or_else(|| self.checkout.clone())
         } else if stack.project_dir.is_empty() {
             self.own_dir.clone()
         } else {
@@ -388,53 +409,94 @@ impl Layout {
 
 /// Starts a stack operation as a tracked update. Operations on one stack are
 /// serialized so overlapping deploys queue up.
-async fn run_op(state: &AppState, user: &User, stack: Stack, action: &str, rollback_to: Option<Update>) -> AppResult<Update> {
+async fn run_op(
+    state: &AppState,
+    user: &User,
+    stack: Stack,
+    action: &str,
+    rollback_to: Option<Update>,
+) -> AppResult<Update> {
     let op = action.to_string();
     let st = state.clone();
-    updates::spawn(state, user, "stack", &stack.name.clone(), action, move |log| async move {
-        let _guard = lock(&st, &stack.name, &log).await;
-        // Re-read so a queued operation uses the latest saved settings.
-        let stack = fetch(&st, &stack.name).await.map_err(|e| anyhow::anyhow!(e.message))?;
-        let layout = Layout::of(&st, &stack);
-        write_files(&layout, &stack).await?;
-        match op.as_str() {
-            "deploy" => deploy(&st, &log, &layout, &stack).await,
-            "rollback" => roll_back(&st, &log, &layout, &stack, rollback_to.expect("rollback target")).await,
-            other => {
-                let args: &[&str] = match other {
-                    "pull" => &["pull"],
-                    "start" => &["start"],
-                    "stop" => &["stop"],
-                    "restart" => &["restart"],
-                    "down" => &["down", "--remove-orphans"],
-                    _ => unreachable!(),
-                };
-                if stack.source == "git" && !layout.compose_file(&stack).exists() {
-                    anyhow::bail!("the repository hasn't been checked out yet; deploy first");
+    updates::spawn(
+        state,
+        user,
+        "stack",
+        &stack.name.clone(),
+        action,
+        move |log| async move {
+            let _guard = lock(&st, &stack.name, &log).await;
+            // Re-read so a queued operation uses the latest saved settings.
+            let stack = fetch(&st, &stack.name)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.message))?;
+            let layout = Layout::of(&st, &stack);
+            write_files(&layout, &stack).await?;
+            match op.as_str() {
+                "deploy" => deploy(&st, &log, &layout, &stack).await,
+                "rollback" => {
+                    roll_back(
+                        &st,
+                        &log,
+                        &layout,
+                        &stack,
+                        rollback_to.expect("rollback target"),
+                    )
+                    .await
                 }
-                compose(&log, &layout, &stack, args).await
+                other => {
+                    let args: &[&str] = match other {
+                        "pull" => &["pull"],
+                        "start" => &["start"],
+                        "stop" => &["stop"],
+                        "restart" => &["restart"],
+                        "down" => &["down", "--remove-orphans"],
+                        _ => unreachable!(),
+                    };
+                    if stack.source == "git" && !layout.compose_file(&stack).exists() {
+                        anyhow::bail!("the repository hasn't been checked out yet; deploy first");
+                    }
+                    compose(&log, &layout, &stack, args).await
+                }
             }
-        }
-    })
+        },
+    )
     .await
 }
 
 const UP: &[&str] = &["up", "-d", "--remove-orphans"];
 
-async fn deploy(state: &AppState, log: &UpdateLog, layout: &Layout, stack: &Stack) -> anyhow::Result<()> {
+async fn deploy(
+    state: &AppState,
+    log: &UpdateLog,
+    layout: &Layout,
+    stack: &Stack,
+) -> anyhow::Result<()> {
     let mut commit = String::new();
     if stack.source == "git" {
         let token = stack.token(&state.db).await;
-        let c = git::sync_checkout(log, &layout.checkout, &stack.git_url, &stack.git_branch, &token).await?;
-        log.line(format!("checked out {} \"{}\"", c.short(), c.message)).await;
-        log.set_detail(&format!("{} {}", c.short(), c.message)).await;
+        let c = git::sync_checkout(
+            log,
+            &layout.checkout,
+            &stack.git_url,
+            &stack.git_branch,
+            &token,
+        )
+        .await?;
+        log.line(format!("checked out {} \"{}\"", c.short(), c.message))
+            .await;
+        log.set_detail(&format!("{} {}", c.short(), c.message))
+            .await;
         sqlx::query("UPDATE stacks SET last_seen_commit = ? WHERE id = ?")
             .bind(&c.sha)
             .bind(stack.id)
             .execute(&state.db)
             .await?;
         if !layout.compose_file(stack).is_file() {
-            anyhow::bail!("no compose file at {} in the repository", stack.compose_path);
+            anyhow::bail!(
+                "no compose file at {} in the repository",
+                stack.compose_path
+            );
         }
         commit = c.sha.clone();
         compose(log, layout, stack, UP).await?;
@@ -448,11 +510,16 @@ async fn deploy(state: &AppState, log: &UpdateLog, layout: &Layout, stack: &Stac
         compose(log, layout, stack, UP).await?;
     }
     let snapshot = Snapshot {
-        compose: if stack.source == "git" { String::new() } else { stack.compose.clone() },
+        compose: if stack.source == "git" {
+            String::new()
+        } else {
+            stack.compose.clone()
+        },
         env: stack.env.clone(),
         commit,
     };
-    log.set_artifact("", &serde_json::to_string(&snapshot)?).await;
+    log.set_artifact("", &serde_json::to_string(&snapshot)?)
+        .await;
     Ok(())
 }
 
@@ -462,7 +529,8 @@ async fn lock(state: &AppState, name: &str, log: &UpdateLog) -> tokio::sync::Own
     match lock.clone().try_lock_owned() {
         Ok(g) => g,
         Err(_) => {
-            log.line("waiting for the previous operation on this stack to finish…").await;
+            log.line("waiting for the previous operation on this stack to finish…")
+                .await;
             lock.lock_owned().await
         }
     }
@@ -482,26 +550,59 @@ async fn rollback(
         .await?
         .filter(|u| u.target_type == "stack" && u.target_name == stack.name)
         .ok_or_else(|| AppError::not_found("deploy not found for this stack"))?;
-    if target.status != "success" || !matches!(target.operation.as_str(), "deploy" | "rollback") || target.snapshot.is_empty() {
-        return Err(AppError::bad_request("only successful deploys made by this version of Harbor can be rolled back to"));
+    if target.status != "success"
+        || !matches!(target.operation.as_str(), "deploy" | "rollback")
+        || target.snapshot.is_empty()
+    {
+        return Err(AppError::bad_request(
+            "only successful deploys made by this version of Harbor can be rolled back to",
+        ));
     }
-    let snapshot: Snapshot = serde_json::from_str(&target.snapshot).map_err(|e| anyhow::anyhow!(e))?;
+    let snapshot: Snapshot =
+        serde_json::from_str(&target.snapshot).map_err(|e| anyhow::anyhow!(e))?;
     if stack.source == "git" && snapshot.commit.is_empty() {
-        return Err(AppError::bad_request("that deploy was made before this stack used git; it can't be rolled back to"));
+        return Err(AppError::bad_request(
+            "that deploy was made before this stack used git; it can't be rolled back to",
+        ));
     }
-    Ok(Json(run_op(&state, &user, stack, "rollback", Some(target)).await?))
+    Ok(Json(
+        run_op(&state, &user, stack, "rollback", Some(target)).await?,
+    ))
 }
 
-async fn roll_back(state: &AppState, log: &UpdateLog, layout: &Layout, stack: &Stack, target: Update) -> anyhow::Result<()> {
+async fn roll_back(
+    state: &AppState,
+    log: &UpdateLog,
+    layout: &Layout,
+    stack: &Stack,
+    target: Update,
+) -> anyhow::Result<()> {
     let snapshot: Snapshot = serde_json::from_str(&target.snapshot)?;
-    let when = target.started_at.get(..16).unwrap_or(&target.started_at).replace('T', " ");
+    let when = target
+        .started_at
+        .get(..16)
+        .unwrap_or(&target.started_at)
+        .replace('T', " ");
     let restored = if stack.source == "git" {
         // Restore the commit; `last_seen_commit` stays so the poller doesn't
         // immediately redeploy the newer head.
-        log.line(format!("checking out {} from deploy #{}", &snapshot.commit[..7.min(snapshot.commit.len())], target.id)).await;
+        log.line(format!(
+            "checking out {} from deploy #{}",
+            &snapshot.commit[..7.min(snapshot.commit.len())],
+            target.id
+        ))
+        .await;
         let token = stack.token(&state.db).await;
-        let c = git::fetch_and_reset(log, &layout.checkout, &stack.git_url, &snapshot.commit, &token).await?;
-        log.set_detail(&format!("↩ {} {}", c.short(), c.message)).await;
+        let c = git::fetch_and_reset(
+            log,
+            &layout.checkout,
+            &stack.git_url,
+            &snapshot.commit,
+            &token,
+        )
+        .await?;
+        log.set_detail(&format!("↩ {} {}", c.short(), c.message))
+            .await;
         sqlx::query_as::<_, Stack>(
             "UPDATE stacks SET env = ?, last_commit = ?, last_commit_message = ?, updated_at = ? WHERE id = ? RETURNING *",
         )
@@ -513,15 +614,22 @@ async fn roll_back(state: &AppState, log: &UpdateLog, layout: &Layout, stack: &S
         .fetch_one(&state.db)
         .await?
     } else {
-        log.line(format!("restoring compose file and variables from deploy #{} ({when} UTC)", target.id)).await;
-        log.set_detail(&format!("↩ deploy #{} from {when} UTC", target.id)).await;
-        sqlx::query_as::<_, Stack>("UPDATE stacks SET compose = ?, env = ?, updated_at = ? WHERE id = ? RETURNING *")
-            .bind(&snapshot.compose)
-            .bind(&snapshot.env)
-            .bind(now())
-            .bind(stack.id)
-            .fetch_one(&state.db)
-            .await?
+        log.line(format!(
+            "restoring compose file and variables from deploy #{} ({when} UTC)",
+            target.id
+        ))
+        .await;
+        log.set_detail(&format!("↩ deploy #{} from {when} UTC", target.id))
+            .await;
+        sqlx::query_as::<_, Stack>(
+            "UPDATE stacks SET compose = ?, env = ?, updated_at = ? WHERE id = ? RETURNING *",
+        )
+        .bind(&snapshot.compose)
+        .bind(&snapshot.env)
+        .bind(now())
+        .bind(stack.id)
+        .fetch_one(&state.db)
+        .await?
     };
     write_files(layout, &restored).await?;
     compose(log, layout, &restored, UP).await?;
@@ -543,13 +651,22 @@ async fn write_files(layout: &Layout, stack: &Stack) -> anyhow::Result<()> {
 
 /// Runs `docker compose` for the stack with absolute paths, streaming its
 /// output into the update log.
-async fn compose(log: &UpdateLog, layout: &Layout, stack: &Stack, args: &[&str]) -> anyhow::Result<()> {
+async fn compose(
+    log: &UpdateLog,
+    layout: &Layout,
+    stack: &Stack,
+    args: &[&str],
+) -> anyhow::Result<()> {
     let project_dir = layout.project_dir(stack);
     if !project_dir.is_dir() {
         anyhow::bail!(
             "project directory {} doesn't exist{}",
             project_dir.display(),
-            if stack.project_dir.is_empty() { "" } else { " (if Harbor runs in Docker, mount it at the same path)" }
+            if stack.project_dir.is_empty() {
+                ""
+            } else {
+                " (if Harbor runs in Docker, mount it at the same path)"
+            }
         );
     }
     let mut cmd = Command::new("docker");
@@ -568,7 +685,12 @@ async fn compose(log: &UpdateLog, layout: &Layout, stack: &Stack, args: &[&str])
         .current_dir(&project_dir)
         .env("COMPOSE_ANSI", "never")
         .env("COMPOSE_PROGRESS", "plain");
-    crate::process::run(log, cmd, &format!("docker compose -p {} {}", stack.name, args.join(" "))).await
+    crate::process::run(
+        log,
+        cmd,
+        &format!("docker compose -p {} {}", stack.name, args.join(" ")),
+    )
+    .await
 }
 
 async fn deploy_commit(state: &AppState, stack: Stack, sha: &str, by: &str) -> AppResult<Update> {
@@ -598,17 +720,23 @@ async fn github_webhook(
     )
     .map_err(|_| unauthorized())?;
     webhook_response(match push {
-        git::Push::Deploy(sha) => git::Push::Deploy(deploy_commit(&state, stack, &sha, "github").await?.id.to_string()),
+        git::Push::Deploy(sha) => git::Push::Deploy(
+            deploy_commit(&state, stack, &sha, "github")
+                .await?
+                .id
+                .to_string(),
+        ),
         other => other,
     })
 }
 
 /// Checks auto-deploy git stacks for new commits (called by the poller).
 pub async fn poll(state: &AppState) {
-    let due = sqlx::query_as::<_, Stack>("SELECT * FROM stacks WHERE source = 'git' AND auto_deploy = 1")
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
+    let due =
+        sqlx::query_as::<_, Stack>("SELECT * FROM stacks WHERE source = 'git' AND auto_deploy = 1")
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
     for stack in due {
         if let Err(e) = poll_one(state, stack).await {
             tracing::warn!("auto-deploy check failed: {e:#}");
@@ -628,7 +756,11 @@ async fn poll_one(state: &AppState, stack: Stack) -> anyhow::Result<()> {
     }
     let head = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        git::remote_head(&stack.git_url, &stack.git_branch, &stack.token(&state.db).await),
+        git::remote_head(
+            &stack.git_url,
+            &stack.git_branch,
+            &stack.token(&state.db).await,
+        ),
     )
     .await
     .map_err(|_| anyhow::anyhow!("timed out checking {}", stack.name))??;
@@ -636,8 +768,14 @@ async fn poll_one(state: &AppState, stack: Stack) -> anyhow::Result<()> {
         anyhow::bail!("branch '{}' not found for {}", stack.git_branch, stack.name);
     };
     if sha != stack.last_seen_commit {
-        tracing::info!("new commit {} for stack {}; deploying", &sha[..7.min(sha.len())], stack.name);
-        deploy_commit(state, stack, &sha, "auto-deploy").await.map_err(|e| anyhow::anyhow!(e.message))?;
+        tracing::info!(
+            "new commit {} for stack {}; deploying",
+            &sha[..7.min(sha.len())],
+            stack.name
+        );
+        deploy_commit(state, stack, &sha, "auto-deploy")
+            .await
+            .map_err(|e| anyhow::anyhow!(e.message))?;
     }
     Ok(())
 }

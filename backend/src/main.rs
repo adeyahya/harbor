@@ -1,5 +1,5 @@
-mod assets;
 mod accounts;
+mod assets;
 mod auth;
 mod backup_destinations;
 mod backups;
@@ -37,7 +37,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let data_dir = PathBuf::from(std::env::var("HARBOR_DATA_DIR").unwrap_or_else(|_| "./data".into()));
+    let data_dir =
+        PathBuf::from(std::env::var("HARBOR_DATA_DIR").unwrap_or_else(|_| "./data".into()));
     let addr = SocketAddr::from_str(
         &std::env::var("HARBOR_ADDR").unwrap_or_else(|_| "127.0.0.1:9120".into()),
     )
@@ -56,7 +57,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .await
         .context("opening database")?;
-    sqlx::migrate!().run(&db).await.context("running migrations")?;
+    sqlx::migrate!()
+        .run(&db)
+        .await
+        .context("running migrations")?;
     updates::fail_interrupted(&db).await?;
 
     let docker = connect_docker().context("connecting to Docker")?;
@@ -95,12 +99,18 @@ async fn main() -> anyhow::Result<()> {
         .nest("/import", import::router())
         .nest("/backups", backups::router())
         .nest("/updates", updates::router())
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_user));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_user,
+        ));
 
     let api = Router::new()
         .route("/health", get(|| async { "ok" }))
         .nest("/auth", auth::router())
-        .nest("/webhooks", deployments::webhook_router().merge(stacks::webhook_router()))
+        .nest(
+            "/webhooks",
+            deployments::webhook_router().merge(stacks::webhook_router()),
+        )
         .merge(protected)
         .fallback(|| async { error::AppError::not_found("no such endpoint") });
 
@@ -128,7 +138,12 @@ async fn main() -> anyhow::Result<()> {
 fn connect_docker() -> anyhow::Result<bollard::Docker> {
     if std::env::var_os("DOCKER_HOST").is_none() {
         let endpoint = std::process::Command::new("docker")
-            .args(["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"])
+            .args([
+                "context",
+                "inspect",
+                "--format",
+                "{{.Endpoints.docker.Host}}",
+            ])
             .output()
             .ok()
             .filter(|o| o.status.success())

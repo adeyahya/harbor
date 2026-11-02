@@ -144,7 +144,9 @@ async fn save_config(db: &SqlitePool, id: i64, config: &Config) -> anyhow::Resul
 }
 
 async fn list(State(state): State<AppState>) -> AppResult<Json<Vec<DestinationView>>> {
-    let rows = sqlx::query_as::<_, Destination>("SELECT * FROM backup_destinations ORDER BY name").fetch_all(&state.db).await?;
+    let rows = sqlx::query_as::<_, Destination>("SELECT * FROM backup_destinations ORDER BY name")
+        .fetch_all(&state.db)
+        .await?;
     Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
 
@@ -167,7 +169,10 @@ struct DestinationInput {
 }
 
 fn non_empty(s: &Option<String>) -> Option<String> {
-    s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+    s.as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 /// Applies `input` on top of `config`, validating the result for `kind`.
@@ -186,7 +191,9 @@ fn apply(kind: &str, mut config: Config, input: &DestinationInput) -> AppResult<
         "gdrive" => {
             let client_id = input.client_id.trim();
             if client_id.is_empty() {
-                return Err(AppError::bad_request("a Google OAuth client ID is required"));
+                return Err(AppError::bad_request(
+                    "a Google OAuth client ID is required",
+                ));
             }
             if client_id != config.client_id {
                 // Tokens belong to the old client.
@@ -198,10 +205,16 @@ fn apply(kind: &str, mut config: Config, input: &DestinationInput) -> AppResult<
                 config.client_secret = secret;
             }
             if config.client_secret.is_empty() {
-                return Err(AppError::bad_request("a Google OAuth client secret is required"));
+                return Err(AppError::bad_request(
+                    "a Google OAuth client secret is required",
+                ));
             }
             let folder = input.folder_name.trim();
-            let folder = if folder.is_empty() { "Harbor backups" } else { folder };
+            let folder = if folder.is_empty() {
+                "Harbor backups"
+            } else {
+                folder
+            };
             if folder != config.folder_name {
                 config.folder_id.clear();
             }
@@ -210,7 +223,9 @@ fn apply(kind: &str, mut config: Config, input: &DestinationInput) -> AppResult<
         "rclone" => {
             let remote = input.remote.trim();
             if !remote.contains(':') || remote.starts_with(':') {
-                return Err(AppError::bad_request("the remote must look like name:path, e.g. s3:my-bucket/harbor"));
+                return Err(AppError::bad_request(
+                    "the remote must look like name:path, e.g. s3:my-bucket/harbor",
+                ));
             }
             config.remote = remote.to_string();
             if let Some(conf) = non_empty(&input.rclone_config) {
@@ -218,10 +233,16 @@ fn apply(kind: &str, mut config: Config, input: &DestinationInput) -> AppResult<
             }
             let name = remote.split(':').next().unwrap_or_default();
             if !config.rclone_config.contains(&format!("[{name}]")) {
-                return Err(AppError::bad_request(format!("the rclone config needs a [{name}] section for the remote")));
+                return Err(AppError::bad_request(format!(
+                    "the rclone config needs a [{name}] section for the remote"
+                )));
             }
         }
-        _ => return Err(AppError::bad_request("kind must be gdrive, local or rclone")),
+        _ => {
+            return Err(AppError::bad_request(
+                "kind must be gdrive, local or rclone",
+            ));
+        }
     }
     Ok(config)
 }
@@ -234,7 +255,10 @@ fn clean_name(name: &str) -> AppResult<String> {
     Ok(name.to_string())
 }
 
-async fn create(State(state): State<AppState>, Json(input): Json<DestinationInput>) -> AppResult<Json<DestinationView>> {
+async fn create(
+    State(state): State<AppState>,
+    Json(input): Json<DestinationInput>,
+) -> AppResult<Json<DestinationView>> {
     let name = clean_name(&input.name)?;
     let kind = input.kind.clone().unwrap_or_default();
     let config = apply(&kind, Config::default(), &input)?;
@@ -250,22 +274,31 @@ async fn create(State(state): State<AppState>, Json(input): Json<DestinationInpu
     Ok(Json(d.into()))
 }
 
-async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(input): Json<DestinationInput>) -> AppResult<Json<DestinationView>> {
+async fn update(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<DestinationInput>,
+) -> AppResult<Json<DestinationView>> {
     let d = get_destination(&state.db, id).await?;
     let name = clean_name(&input.name)?;
     let config = apply(&d.kind, d.config, &input)?;
-    let d = sqlx::query_as::<_, Destination>("UPDATE backup_destinations SET name = ?, config = ? WHERE id = ? RETURNING *")
-        .bind(name)
-        .bind(serde_json::to_string(&config).map_err(anyhow::Error::from)?)
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
+    let d = sqlx::query_as::<_, Destination>(
+        "UPDATE backup_destinations SET name = ?, config = ? WHERE id = ? RETURNING *",
+    )
+    .bind(name)
+    .bind(serde_json::to_string(&config).map_err(anyhow::Error::from)?)
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(d.into()))
 }
 
 /// Deletes the destination and its jobs. Files already uploaded stay where they are.
 async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    let deleted = sqlx::query("DELETE FROM backup_destinations WHERE id = ?").bind(id).execute(&state.db).await?;
+    let deleted = sqlx::query("DELETE FROM backup_destinations WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     if deleted.rows_affected() == 0 {
         return Err(AppError::not_found("backup destination not found"));
     }
@@ -278,9 +311,13 @@ async fn test(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<J
     let message = match d.kind.as_str() {
         "local" => {
             let dir = PathBuf::from(&d.config.path);
-            tokio::fs::create_dir_all(&dir).await.with_context(|| format!("creating {}", dir.display()))?;
+            tokio::fs::create_dir_all(&dir)
+                .await
+                .with_context(|| format!("creating {}", dir.display()))?;
             let probe = dir.join(".harbor-write-test");
-            tokio::fs::write(&probe, b"ok").await.with_context(|| format!("writing to {}", dir.display()))?;
+            tokio::fs::write(&probe, b"ok")
+                .await
+                .with_context(|| format!("writing to {}", dir.display()))?;
             let _ = tokio::fs::remove_file(&probe).await;
             format!("{} is writable", dir.display())
         }
@@ -288,13 +325,25 @@ async fn test(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<J
             let token = google_access_token(&d.config).await?;
             let mut config = d.config.clone();
             let folder = drive_folder(&state.db, d.id, &mut config, &token).await?;
-            format!("Connected as {}; backups go in the “{}” folder ({folder})", config.account, config.folder_name)
+            format!(
+                "Connected as {}; backups go in the “{}” folder ({folder})",
+                config.account, config.folder_name
+            )
         }
         "rclone" => {
             rclone(&state, &d.config, &["mkdir", &d.config.remote]).await?;
-            let listing = rclone(&state, &d.config, &["lsf", "--max-depth", "1", &d.config.remote]).await?;
+            let listing = rclone(
+                &state,
+                &d.config,
+                &["lsf", "--max-depth", "1", &d.config.remote],
+            )
+            .await?;
             let files = listing.lines().count();
-            format!("{} is reachable ({files} entr{} there)", d.config.remote, if files == 1 { "y" } else { "ies" })
+            format!(
+                "{} is reachable ({files} entr{} there)",
+                d.config.remote,
+                if files == 1 { "y" } else { "ies" }
+            )
         }
         _ => return Err(AppError::bad_request("unknown destination kind")),
     };
@@ -309,7 +358,11 @@ struct AuthorizeInput {
     redirect_uri: String,
 }
 
-async fn google_authorize(State(state): State<AppState>, Path(id): Path<i64>, Json(input): Json<AuthorizeInput>) -> AppResult<Json<Value>> {
+async fn google_authorize(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<AuthorizeInput>,
+) -> AppResult<Json<Value>> {
     let d = get_destination(&state.db, id).await?;
     if d.kind != "gdrive" {
         return Err(AppError::bad_request("not a Google Drive destination"));
@@ -347,7 +400,10 @@ struct CallbackQuery {
 }
 
 /// Google redirects here after consent when Harbor's own URL is the redirect URI.
-async fn google_callback(State(state): State<AppState>, Query(q): Query<CallbackQuery>) -> Redirect {
+async fn google_callback(
+    State(state): State<AppState>,
+    Query(q): Query<CallbackQuery>,
+) -> Redirect {
     let back = |id: Option<i64>, error: Option<String>| {
         Redirect::to(&match (id, error) {
             (_, Some(e)) => format!("/settings?backup_error={}#backups", urlencode(&e)),
@@ -359,7 +415,10 @@ async fn google_callback(State(state): State<AppState>, Query(q): Query<Callback
         return back(None, Some(format!("Google sign-in failed: {e}")));
     }
     let (Some(code), Some(oauth_state)) = (q.code, q.state) else {
-        return back(None, Some("Google didn't return an authorization code".into()));
+        return back(
+            None,
+            Some("Google didn't return an authorization code".into()),
+        );
     };
     let found = sqlx::query_as::<_, Destination>(
         "SELECT * FROM backup_destinations WHERE kind = 'gdrive' AND json_extract(config, '$.oauth_state') = ?",
@@ -369,7 +428,12 @@ async fn google_callback(State(state): State<AppState>, Query(q): Query<Callback
     .await;
     let d = match found {
         Ok(Some(d)) if !oauth_state.is_empty() => d,
-        _ => return back(None, Some("this sign-in link expired; connect again".into())),
+        _ => {
+            return back(
+                None,
+                Some("this sign-in link expired; connect again".into()),
+            );
+        }
     };
     match finish_google(&state.db, d, &code).await {
         Ok(id) => back(Some(id), None),
@@ -392,24 +456,37 @@ struct CodeInput {
 
 /// For redirect URIs Google can't reach Harbor through (e.g. `http://localhost`
 /// with a desktop OAuth client): the user pastes the address they landed on.
-async fn google_code(State(state): State<AppState>, Path(id): Path<i64>, Json(input): Json<CodeInput>) -> AppResult<Json<DestinationView>> {
+async fn google_code(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<CodeInput>,
+) -> AppResult<Json<DestinationView>> {
     let d = get_destination(&state.db, id).await?;
     let raw = input.code.trim();
     let code = match reqwest::Url::parse(raw) {
         Ok(url) => {
-            let param = |k: &str| url.query_pairs().find(|(name, _)| name == k).map(|(_, v)| v.into_owned());
+            let param = |k: &str| {
+                url.query_pairs()
+                    .find(|(name, _)| name == k)
+                    .map(|(_, v)| v.into_owned())
+            };
             if let Some(e) = param("error") {
                 return Err(AppError::bad_request(format!("Google sign-in failed: {e}")));
             }
             if param("state").is_some_and(|s| s != d.config.oauth_state) {
-                return Err(AppError::bad_request("that address is from an older sign-in; connect again"));
+                return Err(AppError::bad_request(
+                    "that address is from an older sign-in; connect again",
+                ));
             }
-            param("code").ok_or_else(|| AppError::bad_request("that address has no code= parameter"))?
+            param("code")
+                .ok_or_else(|| AppError::bad_request("that address has no code= parameter"))?
         }
         Err(_) => raw.to_string(),
     };
     if code.is_empty() {
-        return Err(AppError::bad_request("paste the code or the address Google sent you to"));
+        return Err(AppError::bad_request(
+            "paste the code or the address Google sent you to",
+        ));
     }
     finish_google(&state.db, d, &code).await?;
     Ok(Json(get_destination(&state.db, id).await?.into()))
@@ -459,24 +536,36 @@ async fn finish_google(db: &SqlitePool, d: Destination, code: &str) -> anyhow::R
         .refresh_token
         .ok_or_else(|| anyhow!("Google didn't return a refresh token; remove Harbor's access in your Google account and connect again"))?;
     config.oauth_state.clear();
-    config.account = drive_account(&tokens.access_token).await.unwrap_or_default();
+    config.account = drive_account(&tokens.access_token)
+        .await
+        .unwrap_or_default();
     config.folder_id.clear();
     save_config(db, d.id, &config).await?;
     Ok(d.id)
 }
 
 async fn drive_account(token: &str) -> anyhow::Result<String> {
-    let res = HTTP.get(format!("{DRIVE}/about")).query(&[("fields", "user(emailAddress)")]).bearer_auth(token).send().await?;
+    let res = HTTP
+        .get(format!("{DRIVE}/about"))
+        .query(&[("fields", "user(emailAddress)")])
+        .bearer_auth(token)
+        .send()
+        .await?;
     if !res.status().is_success() {
         return Err(google_error(res).await);
     }
     let v: Value = res.json().await?;
-    Ok(v["user"]["emailAddress"].as_str().unwrap_or_default().to_string())
+    Ok(v["user"]["emailAddress"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string())
 }
 
 async fn google_access_token(config: &Config) -> anyhow::Result<String> {
     if config.refresh_token.is_empty() {
-        bail!("this Google Drive destination isn't connected yet; connect it in Settings → Backups");
+        bail!(
+            "this Google Drive destination isn't connected yet; connect it in Settings → Backups"
+        );
     }
     let res = HTTP
         .post(GOOGLE_TOKEN)
@@ -490,14 +579,21 @@ async fn google_access_token(config: &Config) -> anyhow::Result<String> {
         .await?;
     if !res.status().is_success() {
         let e = google_error(res).await;
-        return Err(e.context("refreshing Google access (if it was revoked, connect the destination again)"));
+        return Err(e.context(
+            "refreshing Google access (if it was revoked, connect the destination again)",
+        ));
     }
     Ok(res.json::<TokenResponse>().await?.access_token)
 }
 
 /// The ID of the backup folder, creating it if needed. With the drive.file
 /// scope Harbor only sees folders it created itself.
-async fn drive_folder(db: &SqlitePool, id: i64, config: &mut Config, token: &str) -> anyhow::Result<String> {
+async fn drive_folder(
+    db: &SqlitePool,
+    id: i64,
+    config: &mut Config,
+    token: &str,
+) -> anyhow::Result<String> {
     if !config.folder_id.is_empty() {
         let res = HTTP
             .get(format!("{DRIVE}/files/{}", config.folder_id))
@@ -505,15 +601,27 @@ async fn drive_folder(db: &SqlitePool, id: i64, config: &mut Config, token: &str
             .bearer_auth(token)
             .send()
             .await?;
-        if res.status().is_success() && !res.json::<Value>().await?["trashed"].as_bool().unwrap_or(false) {
+        if res.status().is_success()
+            && !res.json::<Value>().await?["trashed"]
+                .as_bool()
+                .unwrap_or(false)
+        {
             return Ok(config.folder_id.clone());
         }
     }
     let q = format!(
         "name = '{}' and mimeType = '{FOLDER_MIME}' and trashed = false and 'root' in parents",
-        config.folder_name.replace('\\', "\\\\").replace('\'', "\\'")
+        config
+            .folder_name
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'")
     );
-    let res = HTTP.get(format!("{DRIVE}/files")).query(&[("q", q.as_str()), ("fields", "files(id)")]).bearer_auth(token).send().await?;
+    let res = HTTP
+        .get(format!("{DRIVE}/files"))
+        .query(&[("q", q.as_str()), ("fields", "files(id)")])
+        .bearer_auth(token)
+        .send()
+        .await?;
     if !res.status().is_success() {
         return Err(google_error(res).await);
     }
@@ -531,7 +639,10 @@ async fn drive_folder(db: &SqlitePool, id: i64, config: &mut Config, token: &str
             if !res.status().is_success() {
                 return Err(google_error(res).await);
             }
-            res.json::<Value>().await?["id"].as_str().ok_or_else(|| anyhow!("Drive didn't return the folder's ID"))?.to_string()
+            res.json::<Value>().await?["id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Drive didn't return the folder's ID"))?
+                .to_string()
         }
     };
     config.folder_id = folder.clone();
@@ -540,7 +651,13 @@ async fn drive_folder(db: &SqlitePool, id: i64, config: &mut Config, token: &str
 }
 
 /// Resumable upload, so large archives survive dropped connections.
-async fn drive_upload(token: &str, folder: &str, file: &FsPath, name: &str, log: &UpdateLog) -> anyhow::Result<String> {
+async fn drive_upload(
+    token: &str,
+    folder: &str,
+    file: &FsPath,
+    name: &str,
+    log: &UpdateLog,
+) -> anyhow::Result<String> {
     let size = tokio::fs::metadata(file).await?.len();
     let res = HTTP
         .post(DRIVE_UPLOAD)
@@ -577,7 +694,11 @@ async fn drive_upload(token: &str, folder: &str, file: &FsPath, name: &str, log:
             len += n;
         }
         let end = offset + len as u64;
-        let range = if len == 0 { format!("bytes */{size}") } else { format!("bytes {offset}-{}/{size}", end - 1) };
+        let range = if len == 0 {
+            format!("bytes */{size}")
+        } else {
+            format!("bytes {offset}-{}/{size}", end - 1)
+        };
         let sent = HTTP
             .put(&session)
             .header(reqwest::header::CONTENT_RANGE, range)
@@ -598,7 +719,8 @@ async fn drive_upload(token: &str, folder: &str, file: &FsPath, name: &str, log:
             }
             Err(e) if failures < 5 => {
                 failures += 1;
-                log.line(format!("upload interrupted ({e:#}); retrying")).await;
+                log.line(format!("upload interrupted ({e:#}); retrying"))
+                    .await;
                 tokio::time::sleep(Duration::from_secs(2u64.pow(failures))).await;
                 // Ask Drive how much it has, then continue from there.
                 offset = drive_received(&session, size).await.unwrap_or(offset);
@@ -609,14 +731,22 @@ async fn drive_upload(token: &str, folder: &str, file: &FsPath, name: &str, log:
         match res.status().as_u16() {
             200 | 201 => {
                 let v: Value = res.json().await?;
-                return v["id"].as_str().map(String::from).ok_or_else(|| anyhow!("Drive didn't return the file's ID"));
+                return v["id"]
+                    .as_str()
+                    .map(String::from)
+                    .ok_or_else(|| anyhow!("Drive didn't return the file's ID"));
             }
             308 => {
                 offset = received_from(res.headers()).unwrap_or(0);
                 let pct = offset * 100 / size.max(1);
                 if pct >= reported + 20 {
                     reported = pct - pct % 20;
-                    log.line(format!("uploaded {} of {} ({pct}%)", human(offset), human(size))).await;
+                    log.line(format!(
+                        "uploaded {} of {} ({pct}%)",
+                        human(offset),
+                        human(size)
+                    ))
+                    .await;
                 }
             }
             _ => return Err(google_error(res).await),
@@ -649,14 +779,22 @@ pub fn human(n: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", units[i]) }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", units[i])
+    }
 }
 
 // ---- rclone ------------------------------------------------------------------
 
 /// `remote:path` joined with a file name.
 fn rclone_path(remote: &str, file: &str) -> String {
-    if remote.ends_with(':') || remote.ends_with('/') { format!("{remote}{file}") } else { format!("{remote}/{file}") }
+    if remote.ends_with(':') || remote.ends_with('/') {
+        format!("{remote}{file}")
+    } else {
+        format!("{remote}/{file}")
+    }
 }
 
 /// The exec command for an rclone invocation inside the helper. The config is
@@ -677,8 +815,17 @@ fn rclone_cmd(args: &[&str]) -> Vec<String> {
 async fn rclone(state: &AppState, config: &Config, args: &[&str]) -> anyhow::Result<String> {
     let helper = crate::backups::Helper::start(state, crate::backups::HelperSpec::rclone()).await?;
     let mut args = args.to_vec();
-    args.extend(["--retries", "1", "--low-level-retries", "2", "--contimeout", "15s"]);
-    let (out, stderr, code) = helper.exec(rclone_cmd(&args), env(config), None, None).await?;
+    args.extend([
+        "--retries",
+        "1",
+        "--low-level-retries",
+        "2",
+        "--contimeout",
+        "15s",
+    ]);
+    let (out, stderr, code) = helper
+        .exec(rclone_cmd(&args), env(config), None, None)
+        .await?;
     if code != 0 {
         bail!("rclone failed: {}", stderr.trim());
     }
@@ -693,15 +840,26 @@ fn env(config: &Config) -> Vec<String> {
 
 impl Destination {
     /// Stores `file` as `name`; returns the reference used to find it again.
-    pub async fn upload(&self, state: &AppState, file: &FsPath, name: &str, log: &UpdateLog) -> anyhow::Result<String> {
+    pub async fn upload(
+        &self,
+        state: &AppState,
+        file: &FsPath,
+        name: &str,
+        log: &UpdateLog,
+    ) -> anyhow::Result<String> {
         match self.kind.as_str() {
             "local" => {
                 let dir = PathBuf::from(&self.config.path);
-                tokio::fs::create_dir_all(&dir).await.with_context(|| format!("creating {}", dir.display()))?;
+                tokio::fs::create_dir_all(&dir)
+                    .await
+                    .with_context(|| format!("creating {}", dir.display()))?;
                 let partial = dir.join(format!(".{name}.partial"));
-                tokio::fs::copy(file, &partial).await.with_context(|| format!("writing to {}", dir.display()))?;
+                tokio::fs::copy(file, &partial)
+                    .await
+                    .with_context(|| format!("writing to {}", dir.display()))?;
                 tokio::fs::rename(&partial, dir.join(name)).await?;
-                log.line(format!("saved to {}", dir.join(name).display())).await;
+                log.line(format!("saved to {}", dir.join(name).display()))
+                    .await;
                 Ok(name.to_string())
             }
             "gdrive" => {
@@ -709,14 +867,27 @@ impl Destination {
                 let mut config = self.config.clone();
                 let folder = drive_folder(&state.db, self.id, &mut config, &token).await?;
                 let id = drive_upload(&token, &folder, file, name, log).await?;
-                log.line(format!("uploaded to Google Drive: {}/{name}", config.folder_name)).await;
+                log.line(format!(
+                    "uploaded to Google Drive: {}/{name}",
+                    config.folder_name
+                ))
+                .await;
                 Ok(id)
             }
             "rclone" => {
                 let target = rclone_path(&self.config.remote, name);
-                let helper = crate::backups::Helper::start(state, crate::backups::HelperSpec::rclone()).await?;
+                let helper =
+                    crate::backups::Helper::start(state, crate::backups::HelperSpec::rclone())
+                        .await?;
                 let input = tokio::fs::File::open(file).await?;
-                let (_, stderr, code) = helper.exec(rclone_cmd(&["rcat", &target]), env(&self.config), Some(input), None).await?;
+                let (_, stderr, code) = helper
+                    .exec(
+                        rclone_cmd(&["rcat", &target]),
+                        env(&self.config),
+                        Some(input),
+                        None,
+                    )
+                    .await?;
                 if code != 0 {
                     bail!("rclone upload failed: {}", stderr.trim());
                 }
@@ -728,17 +899,31 @@ impl Destination {
     }
 
     /// Fetches a stored backup into `to`.
-    pub async fn download(&self, state: &AppState, remote_ref: &str, to: &FsPath) -> anyhow::Result<()> {
+    pub async fn download(
+        &self,
+        state: &AppState,
+        remote_ref: &str,
+        to: &FsPath,
+    ) -> anyhow::Result<()> {
         match self.kind.as_str() {
             "local" => {
                 let src = PathBuf::from(&self.config.path).join(remote_ref);
-                tokio::fs::copy(&src, to).await.with_context(|| format!("reading {}", src.display()))?;
+                tokio::fs::copy(&src, to)
+                    .await
+                    .with_context(|| format!("reading {}", src.display()))?;
             }
             "gdrive" => {
                 let token = google_access_token(&self.config).await?;
-                let res = HTTP.get(format!("{DRIVE}/files/{remote_ref}")).query(&[("alt", "media")]).bearer_auth(&token).send().await?;
+                let res = HTTP
+                    .get(format!("{DRIVE}/files/{remote_ref}"))
+                    .query(&[("alt", "media")])
+                    .bearer_auth(&token)
+                    .send()
+                    .await?;
                 if !res.status().is_success() {
-                    return Err(google_error(res).await.context("downloading from Google Drive"));
+                    return Err(google_error(res)
+                        .await
+                        .context("downloading from Google Drive"));
                 }
                 let mut out = tokio::fs::File::create(to).await?;
                 let mut body = res.bytes_stream();
@@ -749,9 +934,18 @@ impl Destination {
             }
             "rclone" => {
                 let source = rclone_path(&self.config.remote, remote_ref);
-                let helper = crate::backups::Helper::start(state, crate::backups::HelperSpec::rclone()).await?;
+                let helper =
+                    crate::backups::Helper::start(state, crate::backups::HelperSpec::rclone())
+                        .await?;
                 let out = tokio::fs::File::create(to).await?;
-                let (_, stderr, code) = helper.exec(rclone_cmd(&["cat", &source]), env(&self.config), None, Some(out)).await?;
+                let (_, stderr, code) = helper
+                    .exec(
+                        rclone_cmd(&["cat", &source]),
+                        env(&self.config),
+                        None,
+                        Some(out),
+                    )
+                    .await?;
                 if code != 0 {
                     bail!("rclone download failed: {}", stderr.trim());
                 }
@@ -764,13 +958,21 @@ impl Destination {
     /// Deletes a stored backup; one that's already gone counts as deleted.
     pub async fn delete(&self, state: &AppState, remote_ref: &str) -> anyhow::Result<()> {
         match self.kind.as_str() {
-            "local" => match tokio::fs::remove_file(PathBuf::from(&self.config.path).join(remote_ref)).await {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-                _ => Ok(()),
-            },
+            "local" => {
+                match tokio::fs::remove_file(PathBuf::from(&self.config.path).join(remote_ref))
+                    .await
+                {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+                    _ => Ok(()),
+                }
+            }
             "gdrive" => {
                 let token = google_access_token(&self.config).await?;
-                let res = HTTP.delete(format!("{DRIVE}/files/{remote_ref}")).bearer_auth(&token).send().await?;
+                let res = HTTP
+                    .delete(format!("{DRIVE}/files/{remote_ref}"))
+                    .bearer_auth(&token)
+                    .send()
+                    .await?;
                 if res.status().is_success() || res.status() == reqwest::StatusCode::NOT_FOUND {
                     Ok(())
                 } else {
@@ -812,7 +1014,10 @@ mod tests {
         i.path = "backups".into();
         assert!(apply("local", Config::default(), &i).is_err());
         i.path = "/var/lib/harbor/backups/".into();
-        assert_eq!(apply("local", Config::default(), &i).unwrap().path, "/var/lib/harbor/backups");
+        assert_eq!(
+            apply("local", Config::default(), &i).unwrap().path,
+            "/var/lib/harbor/backups"
+        );
     }
 
     #[test]

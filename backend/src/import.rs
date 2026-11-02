@@ -99,19 +99,20 @@ fn name_of(c: &ContainerSummary) -> String {
 
 fn is_komodo_image(image: &str) -> bool {
     let i = image.to_lowercase();
-    i.contains("komodo-core") || i.contains("komodo-periphery") || i.contains("moghtech/komodo") || i.contains("mbecker20/komodo")
+    i.contains("komodo-core")
+        || i.contains("komodo-periphery")
+        || i.contains("moghtech/komodo")
+        || i.contains("mbecker20/komodo")
 }
 
 /// Harbor's own container ID when it runs in Docker (from the cgroup mount
 /// paths, which don't depend on the configured hostname).
 fn own_container_id() -> Option<String> {
     let info = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
-    info.split("/containers/")
-        .skip(1)
-        .find_map(|rest| {
-            let id: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
-            (id.len() == 64).then_some(id)
-        })
+    info.split("/containers/").skip(1).find_map(|rest| {
+        let id: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+        (id.len() == 64).then_some(id)
+    })
 }
 
 /// A Harbor-valid name derived from a container name.
@@ -119,7 +120,13 @@ fn suggest_name(name: &str) -> String {
     let mut s: String = name
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     s = s.trim_start_matches(['-', '_']).chars().take(63).collect();
     if s.is_empty() { "imported".into() } else { s }
@@ -138,31 +145,49 @@ fn summary(c: &ContainerSummary) -> CandidateContainer {
 async fn candidates(State(state): State<AppState>) -> AppResult<Json<Candidates>> {
     let containers = state
         .docker
-        .list_containers(Some(ListContainersOptions { all: true, ..Default::default() }))
+        .list_containers(Some(ListContainersOptions {
+            all: true,
+            ..Default::default()
+        }))
         .await?;
-    let stack_names: HashSet<String> = sqlx::query_scalar("SELECT name FROM stacks").fetch_all(&state.db).await?.into_iter().collect();
-    let deployment_names: HashSet<String> = sqlx::query_as::<_, (String, String)>("SELECT name, adopted_container FROM deployments")
+    let stack_names: HashSet<String> = sqlx::query_scalar("SELECT name FROM stacks")
         .fetch_all(&state.db)
         .await?
         .into_iter()
-        .flat_map(|(n, a)| [n, a])
-        .filter(|n| !n.is_empty())
         .collect();
+    let deployment_names: HashSet<String> =
+        sqlx::query_as::<_, (String, String)>("SELECT name, adopted_container FROM deployments")
+            .fetch_all(&state.db)
+            .await?
+            .into_iter()
+            .flat_map(|(n, a)| [n, a])
+            .filter(|n| !n.is_empty())
+            .collect();
     let own_id = own_container_id();
 
     let mut projects: BTreeMap<String, Vec<&ContainerSummary>> = BTreeMap::new();
     let mut standalone = Vec::new();
-    for c in containers.iter().filter(|c| !crate::volume_browser::is_helper(c)) {
-        let managed = label(c, "harbor.deployment").is_some() || deployment_names.contains(&name_of(c));
+    for c in containers
+        .iter()
+        .filter(|c| !crate::volume_browser::is_helper(c))
+    {
+        let managed =
+            label(c, "harbor.deployment").is_some() || deployment_names.contains(&name_of(c));
         match label(c, PROJECT) {
-            Some(p) if !stack_names.contains(p) && !managed => projects.entry(p.to_string()).or_default().push(c),
+            Some(p) if !stack_names.contains(p) && !managed => {
+                projects.entry(p.to_string()).or_default().push(c)
+            }
             Some(_) => {}
             None if !managed => standalone.push(c),
             None => {}
         }
     }
 
-    let is_self = |c: &ContainerSummary| own_id.as_deref().is_some_and(|id| c.id.as_deref() == Some(id));
+    let is_self = |c: &ContainerSummary| {
+        own_id
+            .as_deref()
+            .is_some_and(|id| c.id.as_deref() == Some(id))
+    };
     let mut stacks = Vec::new();
     for (project, members) in projects {
         let first = members[0];
@@ -173,11 +198,19 @@ async fn candidates(State(state): State<AppState>) -> AppResult<Json<Candidates>
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .collect();
-        let repo = if working_dir.is_empty() { None } else { git::repo_info(FsPath::new(&working_dir)).await };
+        let repo = if working_dir.is_empty() {
+            None
+        } else {
+            git::repo_info(FsPath::new(&working_dir)).await
+        };
         stacks.push(StackCandidate {
-            compose_readable: config_files.first().is_some_and(|f| std::fs::read_to_string(f).is_ok()),
+            compose_readable: config_files
+                .first()
+                .is_some_and(|f| std::fs::read_to_string(f).is_ok()),
             name_ok: validate_name(&project).is_ok(),
-            is_komodo: members.iter().any(|c| is_komodo_image(c.image.as_deref().unwrap_or_default())),
+            is_komodo: members
+                .iter()
+                .any(|c| is_komodo_image(c.image.as_deref().unwrap_or_default())),
             is_harbor: members.iter().any(|c| is_self(c)),
             git_had_credentials: repo.as_ref().is_some_and(|r| r.had_credentials),
             git_url: repo.as_ref().map(|r| r.url.clone()),
@@ -196,7 +229,10 @@ async fn candidates(State(state): State<AppState>) -> AppResult<Json<Candidates>
                 .ports
                 .iter()
                 .flatten()
-                .filter_map(|p| p.public_port.map(|pub_| format!("{pub_}:{}", p.private_port)))
+                .filter_map(|p| {
+                    p.public_port
+                        .map(|pub_| format!("{pub_}:{}", p.private_port))
+                })
                 .collect();
             ports.sort();
             ports.dedup();
@@ -237,14 +273,30 @@ async fn map_container(state: &AppState, name: &str) -> AppResult<ContainerPrevi
 
     // Image defaults aren't part of the deployment's own settings.
     let image_config = match c.image.as_deref() {
-        Some(id) => state.docker.inspect_image(id).await.ok().and_then(|i| i.config),
+        Some(id) => state
+            .docker
+            .inspect_image(id)
+            .await
+            .ok()
+            .and_then(|i| i.config),
         None => None,
     };
     if image_config.is_none() {
         warnings.push("The container's image is no longer available locally, so all of its environment variables were imported, including the image's defaults.".into());
     }
-    let image_env: HashSet<String> = image_config.as_ref().and_then(|i| i.env.clone()).unwrap_or_default().into_iter().collect();
-    let env: Vec<String> = config.env.clone().unwrap_or_default().into_iter().filter(|e| !image_env.contains(e)).collect();
+    let image_env: HashSet<String> = image_config
+        .as_ref()
+        .and_then(|i| i.env.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let env: Vec<String> = config
+        .env
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| !image_env.contains(e))
+        .collect();
 
     let image = config.image.clone().unwrap_or_default();
     if image.starts_with("sha256:") {
@@ -252,18 +304,29 @@ async fn map_container(state: &AppState, name: &str) -> AppResult<ContainerPrevi
     }
 
     let cmd = config.cmd.clone().unwrap_or_default();
-    let image_cmd = image_config.as_ref().and_then(|i| i.cmd.clone()).unwrap_or_default();
+    let image_cmd = image_config
+        .as_ref()
+        .and_then(|i| i.cmd.clone())
+        .unwrap_or_default();
     let command = if cmd != image_cmd && !cmd.is_empty() {
         if cmd.iter().any(|a| a.contains(char::is_whitespace)) {
-            warnings.push(format!("The command has arguments containing spaces, which Harbor can't express yet: {}", cmd.join(" ")));
+            warnings.push(format!(
+                "The command has arguments containing spaces, which Harbor can't express yet: {}",
+                cmd.join(" ")
+            ));
         }
         cmd.join(" ")
     } else {
         String::new()
     };
-    let image_entrypoint = image_config.as_ref().and_then(|i| i.entrypoint.clone()).unwrap_or_default();
+    let image_entrypoint = image_config
+        .as_ref()
+        .and_then(|i| i.entrypoint.clone())
+        .unwrap_or_default();
     if config.entrypoint.clone().unwrap_or_default() != image_entrypoint {
-        warnings.push("Custom entrypoint isn't supported and will reset to the image's default.".into());
+        warnings.push(
+            "Custom entrypoint isn't supported and will reset to the image's default.".into(),
+        );
     }
 
     let mut ports: Vec<String> = host
@@ -272,11 +335,22 @@ async fn map_container(state: &AppState, name: &str) -> AppResult<ContainerPrevi
         .unwrap_or_default()
         .into_iter()
         .flat_map(|(key, bindings)| {
-            let (port, proto) = key.split_once('/').map(|(p, pr)| (p.to_string(), pr.to_string())).unwrap_or((key.clone(), "tcp".into()));
+            let (port, proto) = key
+                .split_once('/')
+                .map(|(p, pr)| (p.to_string(), pr.to_string()))
+                .unwrap_or((key.clone(), "tcp".into()));
             bindings.unwrap_or_default().into_iter().map(move |b| {
                 let ip = b.host_ip.unwrap_or_default();
-                let ip = if ip.is_empty() || ip == "0.0.0.0" || ip == "::" { String::new() } else { format!("{ip}:") };
-                let suffix = if proto == "tcp" { String::new() } else { format!("/{proto}") };
+                let ip = if ip.is_empty() || ip == "0.0.0.0" || ip == "::" {
+                    String::new()
+                } else {
+                    format!("{ip}:")
+                };
+                let suffix = if proto == "tcp" {
+                    String::new()
+                } else {
+                    format!("/{proto}")
+                };
                 format!("{ip}{}:{port}{suffix}", b.host_port.unwrap_or_default())
             })
         })
@@ -286,12 +360,19 @@ async fn map_container(state: &AppState, name: &str) -> AppResult<ContainerPrevi
 
     let mut volumes: Vec<String> = host.binds.clone().unwrap_or_default();
     for m in host.mounts.clone().unwrap_or_default() {
-        let (Some(source), Some(target)) = (m.source, m.target) else { continue };
+        let (Some(source), Some(target)) = (m.source, m.target) else {
+            continue;
+        };
         match m.typ {
             Some(MountType::BIND) | Some(MountType::VOLUME) => {
-                volumes.push(format!("{source}:{target}{}", if m.read_only == Some(true) { ":ro" } else { "" }));
+                volumes.push(format!(
+                    "{source}:{target}{}",
+                    if m.read_only == Some(true) { ":ro" } else { "" }
+                ));
             }
-            Some(MountType::TMPFS) => warnings.push(format!("tmpfs mount at {target} isn't supported.")),
+            Some(MountType::TMPFS) => {
+                warnings.push(format!("tmpfs mount at {target} isn't supported."))
+            }
             _ => {}
         }
     }
@@ -299,7 +380,9 @@ async fn map_container(state: &AppState, name: &str) -> AppResult<ContainerPrevi
     let network = match host.network_mode.as_deref() {
         None | Some("default") | Some("bridge") => String::new(),
         Some(m) if m.starts_with("container:") => {
-            warnings.push(format!("Network mode '{m}' isn't supported; it will use the default network."));
+            warnings.push(format!(
+                "Network mode '{m}' isn't supported; it will use the default network."
+            ));
             String::new()
         }
         Some(m) => m.to_string(),
@@ -318,29 +401,89 @@ async fn map_container(state: &AppState, name: &str) -> AppResult<ContainerPrevi
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .filter(|(k, _)| !k.starts_with("com.docker.") && !k.starts_with("org.opencontainers.") && k != "harbor.deployment")
-        .filter(|(k, v)| image_config.as_ref().and_then(|i| i.labels.as_ref()).and_then(|l| l.get(k)) != Some(v))
+        .filter(|(k, _)| {
+            !k.starts_with("com.docker.")
+                && !k.starts_with("org.opencontainers.")
+                && k != "harbor.deployment"
+        })
+        .filter(|(k, v)| {
+            image_config
+                .as_ref()
+                .and_then(|i| i.labels.as_ref())
+                .and_then(|l| l.get(k))
+                != Some(v)
+        })
         .map(|(k, v)| format!("{k}={v}"))
         .collect();
     labels.sort();
 
     // Only a driver other than the daemon's default is a container setting.
-    let default_log_driver = state.docker.info().await.ok().and_then(|i| i.logging_driver).unwrap_or_else(|| "json-file".into());
+    let default_log_driver = state
+        .docker
+        .info()
+        .await
+        .ok()
+        .and_then(|i| i.logging_driver)
+        .unwrap_or_else(|| "json-file".into());
     let unsupported: [(&str, bool); 14] = [
         ("privileged mode", host.privileged == Some(true)),
-        ("added capabilities", host.cap_add.as_ref().is_some_and(|v| !v.is_empty())),
-        ("dropped capabilities", host.cap_drop.as_ref().is_some_and(|v| !v.is_empty())),
-        ("devices", host.devices.as_ref().is_some_and(|v| !v.is_empty())),
-        ("extra hosts", host.extra_hosts.as_ref().is_some_and(|v| !v.is_empty())),
-        ("custom DNS servers", host.dns.as_ref().is_some_and(|v| !v.is_empty())),
+        (
+            "added capabilities",
+            host.cap_add.as_ref().is_some_and(|v| !v.is_empty()),
+        ),
+        (
+            "dropped capabilities",
+            host.cap_drop.as_ref().is_some_and(|v| !v.is_empty()),
+        ),
+        (
+            "devices",
+            host.devices.as_ref().is_some_and(|v| !v.is_empty()),
+        ),
+        (
+            "extra hosts",
+            host.extra_hosts.as_ref().is_some_and(|v| !v.is_empty()),
+        ),
+        (
+            "custom DNS servers",
+            host.dns.as_ref().is_some_and(|v| !v.is_empty()),
+        ),
         ("memory limit", host.memory.unwrap_or(0) > 0),
-        ("CPU limit", host.nano_cpus.unwrap_or(0) > 0 || host.cpu_shares.unwrap_or(0) > 0),
-        ("sysctls", host.sysctls.as_ref().is_some_and(|v| !v.is_empty())),
-        ("tmpfs mounts", host.tmpfs.as_ref().is_some_and(|v| !v.is_empty())),
-        ("security options", host.security_opt.as_ref().is_some_and(|v| !v.is_empty())),
-        ("a custom log driver", host.log_config.as_ref().and_then(|l| l.typ.as_deref()).is_some_and(|t| !t.is_empty() && t != default_log_driver)),
-        ("a non-default user", config.user.as_deref().unwrap_or_default() != image_config.as_ref().and_then(|i| i.user.as_deref()).unwrap_or_default()),
-        ("a custom healthcheck", config.healthcheck.is_some() && config.healthcheck != image_config.as_ref().and_then(|i| i.healthcheck.clone())),
+        (
+            "CPU limit",
+            host.nano_cpus.unwrap_or(0) > 0 || host.cpu_shares.unwrap_or(0) > 0,
+        ),
+        (
+            "sysctls",
+            host.sysctls.as_ref().is_some_and(|v| !v.is_empty()),
+        ),
+        (
+            "tmpfs mounts",
+            host.tmpfs.as_ref().is_some_and(|v| !v.is_empty()),
+        ),
+        (
+            "security options",
+            host.security_opt.as_ref().is_some_and(|v| !v.is_empty()),
+        ),
+        (
+            "a custom log driver",
+            host.log_config
+                .as_ref()
+                .and_then(|l| l.typ.as_deref())
+                .is_some_and(|t| !t.is_empty() && t != default_log_driver),
+        ),
+        (
+            "a non-default user",
+            config.user.as_deref().unwrap_or_default()
+                != image_config
+                    .as_ref()
+                    .and_then(|i| i.user.as_deref())
+                    .unwrap_or_default(),
+        ),
+        (
+            "a custom healthcheck",
+            config.healthcheck.is_some()
+                && config.healthcheck != image_config.as_ref().and_then(|i| i.healthcheck.clone()),
+        ),
     ];
     for (what, present) in unsupported {
         if present {
@@ -348,7 +491,12 @@ async fn map_container(state: &AppState, name: &str) -> AppResult<ContainerPrevi
         }
     }
 
-    let container = c.name.clone().unwrap_or_default().trim_start_matches('/').to_string();
+    let container = c
+        .name
+        .clone()
+        .unwrap_or_default()
+        .trim_start_matches('/')
+        .to_string();
     Ok(ContainerPreview {
         suggested_name: suggest_name(&container),
         container,
@@ -365,10 +513,17 @@ async fn map_container(state: &AppState, name: &str) -> AppResult<ContainerPrevi
 }
 
 fn lines(v: Vec<String>) -> String {
-    if v.is_empty() { String::new() } else { v.join("\n") + "\n" }
+    if v.is_empty() {
+        String::new()
+    } else {
+        v.join("\n") + "\n"
+    }
 }
 
-async fn preview_container(State(state): State<AppState>, Path(name): Path<String>) -> AppResult<Json<ContainerPreview>> {
+async fn preview_container(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> AppResult<Json<ContainerPreview>> {
     Ok(Json(map_container(&state, &name).await?))
 }
 
@@ -378,7 +533,10 @@ struct ImportContainer {
     name: String,
 }
 
-async fn import_container(State(state): State<AppState>, Json(body): Json<ImportContainer>) -> AppResult<Json<Deployment>> {
+async fn import_container(
+    State(state): State<AppState>,
+    Json(body): Json<ImportContainer>,
+) -> AppResult<Json<Deployment>> {
     validate_name(&body.name)?;
     let p = map_container(&state, &body.container).await?;
     if p.image.is_empty() {
@@ -426,22 +584,39 @@ struct ImportGit {
     git_token: Option<String>,
 }
 
-async fn import_stack(State(state): State<AppState>, Json(body): Json<ImportStack>) -> AppResult<Json<Stack>> {
+async fn import_stack(
+    State(state): State<AppState>,
+    Json(body): Json<ImportStack>,
+) -> AppResult<Json<Stack>> {
     if let Some(id) = own_container_id()
-        && crate::docker::containers_with_label(&state.docker, &format!("{PROJECT}={}", body.project))
-            .await?
-            .iter()
-            .any(|c| c.id.as_deref() == Some(id.as_str()))
+        && crate::docker::containers_with_label(
+            &state.docker,
+            &format!("{PROJECT}={}", body.project),
+        )
+        .await?
+        .iter()
+        .any(|c| c.id.as_deref() == Some(id.as_str()))
     {
-        return Err(AppError::bad_request("that's Harbor's own compose project; Harbor can't redeploy itself"));
+        return Err(AppError::bad_request(
+            "that's Harbor's own compose project; Harbor can't redeploy itself",
+        ));
     }
     validate_name(&body.project).map_err(|_| {
         AppError::bad_request("the compose project name isn't a valid Harbor stack name (lowercase letters, digits, '-' and '_')")
     })?;
-    let containers = crate::docker::containers_with_label(&state.docker, &format!("{PROJECT}={}", body.project)).await?;
-    let first = containers.first().ok_or_else(|| AppError::not_found("no containers for that compose project"))?;
+    let containers =
+        crate::docker::containers_with_label(&state.docker, &format!("{PROJECT}={}", body.project))
+            .await?;
+    let first = containers
+        .first()
+        .ok_or_else(|| AppError::not_found("no containers for that compose project"))?;
     let working_dir = label(first, WORKING_DIR).unwrap_or_default().to_string();
-    let config_file = label(first, CONFIG_FILES).unwrap_or_default().split(',').next().unwrap_or_default().to_string();
+    let config_file = label(first, CONFIG_FILES)
+        .unwrap_or_default()
+        .split(',')
+        .next()
+        .unwrap_or_default()
+        .to_string();
 
     // Git stacks take the compose file from the repository, so only inline
     // imports need to read (or be given) its content.
@@ -474,7 +649,11 @@ async fn import_stack(State(state): State<AppState>, Json(body): Json<ImportStac
         let root = git::repo_info(FsPath::new(&working_dir))
             .await
             .map(|r| r.root)
-            .ok_or_else(|| AppError::bad_request(format!("{working_dir} isn't inside a git checkout that Harbor can read")))?;
+            .ok_or_else(|| {
+                AppError::bad_request(format!(
+                    "{working_dir} isn't inside a git checkout that Harbor can read"
+                ))
+            })?;
         let compose_path = FsPath::new(&config_file)
             .strip_prefix(&root)
             .map(|p| p.to_string_lossy().into_owned())

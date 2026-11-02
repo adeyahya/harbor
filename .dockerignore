@@ -1,7 +1,30 @@
-# Keep the build context small: build outputs and local state never belong in it.
+# Keep the build context small: build outputs, local state, and secrets
+# never belong in the image.
 .git
+.github
+**/.git
 **/target
 **/node_modules
 frontend/dist
 data
 **/.DS_Store
+
+# Secrets and local databases
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.p8
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+**/*.sqlite
+**/*.sqlite3
+**/credentials.json
+**/client_secret*.json
+**/rclone.conf
+**/id_rsa
+**/id_ed25519

@@ -1,13 +1,13 @@
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 
 // In development the backend runs separately (cargo run); proxy API calls to it.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: { '@': path.resolve(__dirname, './src') },
+    alias: { '@': path.resolve(import.meta.dirname, './src') },
   },
   server: {
     proxy: {
@@ -20,5 +20,9 @@ export default defineConfig({
         configure: (proxy) => proxy.on('proxyReqWs', (req, incoming) => req.setHeader('x-forwarded-host', incoming.headers.host ?? '')),
       },
     },
+  },
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
   },
 })

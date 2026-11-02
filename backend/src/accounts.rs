@@ -52,9 +52,15 @@ fn clean(input: &AccountInput) -> AppResult<(String, String, String)> {
     if name.is_empty() || name.chars().count() > 60 {
         return Err(AppError::bad_request("name must be 1-60 characters"));
     }
-    let host = normalize_host(if input.host.trim().is_empty() { "github.com" } else { &input.host });
+    let host = normalize_host(if input.host.trim().is_empty() {
+        "github.com"
+    } else {
+        &input.host
+    });
     if host.is_empty() || host.contains(['/', ' ']) {
-        return Err(AppError::bad_request("host must be a hostname like github.com"));
+        return Err(AppError::bad_request(
+            "host must be a hostname like github.com",
+        ));
     }
     Ok((name, host, input.username.trim().to_string()))
 }
@@ -68,12 +74,24 @@ fn normalize_host(h: &str) -> String {
 }
 
 async fn list(State(state): State<AppState>) -> AppResult<Json<Vec<Account>>> {
-    Ok(Json(sqlx::query_as::<_, Account>("SELECT * FROM git_accounts ORDER BY name").fetch_all(&state.db).await?))
+    Ok(Json(
+        sqlx::query_as::<_, Account>("SELECT * FROM git_accounts ORDER BY name")
+            .fetch_all(&state.db)
+            .await?,
+    ))
 }
 
-async fn create(State(state): State<AppState>, Json(input): Json<AccountInput>) -> AppResult<Json<Account>> {
+async fn create(
+    State(state): State<AppState>,
+    Json(input): Json<AccountInput>,
+) -> AppResult<Json<Account>> {
     let (name, host, username) = clean(&input)?;
-    let token = input.token.as_deref().map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| AppError::bad_request("token is required"))?;
+    let token = input
+        .token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| AppError::bad_request("token is required"))?;
     Ok(Json(
         sqlx::query_as::<_, Account>(
             "INSERT INTO git_accounts (name, host, username, token, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *",
@@ -88,9 +106,17 @@ async fn create(State(state): State<AppState>, Json(input): Json<AccountInput>) 
     ))
 }
 
-async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(input): Json<AccountInput>) -> AppResult<Json<Account>> {
+async fn update(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<AccountInput>,
+) -> AppResult<Json<Account>> {
     let (name, host, username) = clean(&input)?;
-    let token = input.token.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    let token = input
+        .token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
     sqlx::query_as::<_, Account>(
         "UPDATE git_accounts SET name = ?, host = ?, username = ?, token = COALESCE(?, token) WHERE id = ? RETURNING *",
     )
@@ -106,11 +132,23 @@ async fn update(State(state): State<AppState>, Path(id): Path<i64>, Json(input):
 }
 
 /// Deletes the account; services that chose it fall back to automatic.
-async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<serde_json::Value>> {
+async fn remove(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<serde_json::Value>> {
     let mut tx = state.db.begin().await?;
-    sqlx::query("UPDATE deployments SET git_account_id = NULL WHERE git_account_id = ?").bind(id).execute(&mut *tx).await?;
-    sqlx::query("UPDATE stacks SET git_account_id = NULL WHERE git_account_id = ?").bind(id).execute(&mut *tx).await?;
-    let deleted = sqlx::query("DELETE FROM git_accounts WHERE id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE deployments SET git_account_id = NULL WHERE git_account_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE stacks SET git_account_id = NULL WHERE git_account_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let deleted = sqlx::query("DELETE FROM git_accounts WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     if deleted.rows_affected() == 0 {
         return Err(AppError::not_found("account not found"));
@@ -131,7 +169,12 @@ pub fn url_host(url: &str) -> Option<String> {
 
 /// The token to use for a repository: the chosen account's, else the account
 /// for the repository's host, else the service's own legacy token.
-pub async fn resolve_token(db: &SqlitePool, url: &str, account_id: Option<i64>, fallback: &str) -> String {
+pub async fn resolve_token(
+    db: &SqlitePool,
+    url: &str,
+    account_id: Option<i64>,
+    fallback: &str,
+) -> String {
     let chosen = match account_id {
         Some(id) => sqlx::query_scalar::<_, String>("SELECT token FROM git_accounts WHERE id = ?")
             .bind(id)
@@ -140,12 +183,14 @@ pub async fn resolve_token(db: &SqlitePool, url: &str, account_id: Option<i64>, 
             .ok()
             .flatten(),
         None => match url_host(url) {
-            Some(host) => sqlx::query_scalar::<_, String>("SELECT token FROM git_accounts WHERE host = ? ORDER BY id LIMIT 1")
-                .bind(host)
-                .fetch_optional(db)
-                .await
-                .ok()
-                .flatten(),
+            Some(host) => sqlx::query_scalar::<_, String>(
+                "SELECT token FROM git_accounts WHERE host = ? ORDER BY id LIMIT 1",
+            )
+            .bind(host)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten(),
             None => None,
         },
     };
@@ -158,10 +203,22 @@ mod tests {
 
     #[test]
     fn parses_hosts() {
-        assert_eq!(url_host("https://github.com/a/b.git").as_deref(), Some("github.com"));
-        assert_eq!(url_host("https://tok@GitHub.com/a/b").as_deref(), Some("github.com"));
-        assert_eq!(url_host("git@gitlab.example.com:a/b.git").as_deref(), Some("gitlab.example.com"));
-        assert_eq!(url_host("ssh://git@host.io:2222/a/b").as_deref(), Some("host.io"));
+        assert_eq!(
+            url_host("https://github.com/a/b.git").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            url_host("https://tok@GitHub.com/a/b").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            url_host("git@gitlab.example.com:a/b.git").as_deref(),
+            Some("gitlab.example.com")
+        );
+        assert_eq!(
+            url_host("ssh://git@host.io:2222/a/b").as_deref(),
+            Some("host.io")
+        );
         assert_eq!(url_host("file:///tmp/repo.git"), None);
     }
 }

@@ -24,7 +24,8 @@ use bollard::{
     exec::StartExecResults,
     models::{ContainerCreateBody, ExecConfig, HostConfig, Mount, MountType},
     query_parameters::{
-        CreateContainerOptions, ListContainersOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
+        CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
+        StartContainerOptions, StopContainerOptions,
     },
 };
 use futures_util::StreamExt;
@@ -71,11 +72,19 @@ pub struct HelperSpec {
 
 impl HelperSpec {
     pub fn rclone() -> Self {
-        Self { image: backup_destinations::RCLONE_IMAGE, volume: None, network: true }
+        Self {
+            image: backup_destinations::RCLONE_IMAGE,
+            volume: None,
+            network: true,
+        }
     }
 
     fn volume(name: &str, read_only: bool) -> Self {
-        Self { image: ARCHIVE_IMAGE, volume: Some((name.to_string(), read_only)), network: false }
+        Self {
+            image: ARCHIVE_IMAGE,
+            volume: Some((name.to_string(), read_only)),
+            network: false,
+        }
     }
 }
 
@@ -89,7 +98,15 @@ impl Drop for Helper {
     fn drop(&mut self) {
         let (docker, id) = (self.docker.clone(), self.id.clone());
         tokio::spawn(async move {
-            let _ = docker.remove_container(&id, Some(RemoveContainerOptions { force: true, ..Default::default() })).await;
+            let _ = docker
+                .remove_container(
+                    &id,
+                    Some(RemoveContainerOptions {
+                        force: true,
+                        ..Default::default()
+                    }),
+                )
+                .await;
         });
     }
 }
@@ -133,8 +150,13 @@ impl Helper {
                 },
             )
             .await?;
-        let helper = Self { docker: docker.clone(), id: created.id };
-        docker.start_container(&helper.id, None::<StartContainerOptions>).await?;
+        let helper = Self {
+            docker: docker.clone(),
+            id: created.id,
+        };
+        docker
+            .start_container(&helper.id, None::<StartContainerOptions>)
+            .await?;
         Ok(helper)
     }
 
@@ -162,7 +184,11 @@ impl Helper {
                 },
             )
             .await?;
-        let StartExecResults::Attached { mut output, mut input } = self.docker.start_exec(&exec.id, None).await? else {
+        let StartExecResults::Attached {
+            mut output,
+            mut input,
+        } = self.docker.start_exec(&exec.id, None).await?
+        else {
             bail!("the helper didn't attach");
         };
         let feed = async move {
@@ -184,7 +210,9 @@ impl Helper {
                         None if out.len() < MAX_CAPTURE => out.extend_from_slice(&message),
                         None => {}
                     },
-                    LogOutput::StdErr { message } if err.len() < MAX_CAPTURE => err.push_str(&String::from_utf8_lossy(&message)),
+                    LogOutput::StdErr { message } if err.len() < MAX_CAPTURE => {
+                        err.push_str(&String::from_utf8_lossy(&message))
+                    }
                     _ => {}
                 }
             }
@@ -195,7 +223,12 @@ impl Helper {
         };
         let ((), collected) = tokio::join!(feed, collect);
         let (out, err) = collected?;
-        let code = self.docker.inspect_exec(&exec.id).await?.exit_code.unwrap_or(0);
+        let code = self
+            .docker
+            .inspect_exec(&exec.id)
+            .await?
+            .exit_code
+            .unwrap_or(0);
         Ok((out, err, code))
     }
 }
@@ -207,14 +240,26 @@ pub async fn init(state: &AppState) {
         .docker
         .list_containers(Some(ListContainersOptions {
             all: true,
-            filters: Some(HashMap::from([("label".to_string(), vec![format!("{HELPER_LABEL}={HELPER_KIND}")])])),
+            filters: Some(HashMap::from([(
+                "label".to_string(),
+                vec![format!("{HELPER_LABEL}={HELPER_KIND}")],
+            )])),
             ..Default::default()
         }))
         .await
         .unwrap_or_default();
     for c in leftovers {
         if let Some(id) = c.id {
-            let _ = state.docker.remove_container(&id, Some(RemoveContainerOptions { force: true, ..Default::default() })).await;
+            let _ = state
+                .docker
+                .remove_container(
+                    &id,
+                    Some(RemoveContainerOptions {
+                        force: true,
+                        ..Default::default()
+                    }),
+                )
+                .await;
         }
     }
     let tmp = tmp_dir(state);
@@ -255,26 +300,45 @@ async fn running_users(docker: &Docker, volume: &str) -> anyhow::Result<Vec<(Str
         .into_iter()
         .filter(|c| !crate::volume_browser::is_helper(c))
         .filter_map(|c| {
-            let name = c.names.as_ref().and_then(|n| n.first()).map(|n| n.trim_start_matches('/').to_string()).unwrap_or_default();
+            let name = c
+                .names
+                .as_ref()
+                .and_then(|n| n.first())
+                .map(|n| n.trim_start_matches('/').to_string())
+                .unwrap_or_default();
             c.id.map(|id| (id, name))
         })
         .collect())
 }
 
-async fn stop_all(docker: &Docker, log: &UpdateLog, containers: &[(String, String)]) -> anyhow::Result<()> {
+async fn stop_all(
+    docker: &Docker,
+    log: &UpdateLog,
+    containers: &[(String, String)],
+) -> anyhow::Result<()> {
     for (id, name) in containers {
         log.line(format!("stopping {name}")).await;
-        docker.stop_container(id, None::<StopContainerOptions>).await.with_context(|| format!("stopping {name}"))?;
+        docker
+            .stop_container(id, None::<StopContainerOptions>)
+            .await
+            .with_context(|| format!("stopping {name}"))?;
     }
     Ok(())
 }
 
 /// Starts the containers again, reporting every failure rather than the first.
-async fn start_all(docker: &Docker, log: &UpdateLog, containers: &[(String, String)]) -> anyhow::Result<()> {
+async fn start_all(
+    docker: &Docker,
+    log: &UpdateLog,
+    containers: &[(String, String)],
+) -> anyhow::Result<()> {
     let mut failed = Vec::new();
     for (id, name) in containers {
         log.line(format!("starting {name}")).await;
-        if let Err(e) = docker.start_container(id, None::<StartContainerOptions>).await {
+        if let Err(e) = docker
+            .start_container(id, None::<StartContainerOptions>)
+            .await
+        {
             log.line(format!("couldn't start {name}: {e}")).await;
             failed.push(name.clone());
         }
@@ -319,8 +383,12 @@ async fn with_stopped<T>(
 /// Archives the volume into `to` as a gzipped tarball of its contents.
 async fn archive(state: &AppState, volume: &str, to: &FsPath) -> anyhow::Result<u64> {
     let helper = Helper::start(state, HelperSpec::volume(volume, true)).await?;
-    let out = tokio::fs::File::create(to).await.with_context(|| format!("creating {}", to.display()))?;
-    let cmd = ["tar", "-czf", "-", "-C", "/vol", "."].map(String::from).to_vec();
+    let out = tokio::fs::File::create(to)
+        .await
+        .with_context(|| format!("creating {}", to.display()))?;
+    let cmd = ["tar", "-czf", "-", "-C", "/vol", "."]
+        .map(String::from)
+        .to_vec();
     let (_, stderr, code) = helper.exec(cmd, vec![], None, Some(out)).await?;
     if code != 0 {
         bail!("tar exited with {code}: {}", stderr.trim());
@@ -329,7 +397,10 @@ async fn archive(state: &AppState, volume: &str, to: &FsPath) -> anyhow::Result<
 }
 
 fn archive_name(volume: &str) -> String {
-    format!("{volume}-{}.tar.gz", chrono::Utc::now().format("%Y%m%d-%H%M%S"))
+    format!(
+        "{volume}-{}.tar.gz",
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    )
 }
 
 #[derive(Clone, sqlx::FromRow)]
@@ -397,7 +468,11 @@ async fn start_backup(
     })
     .await?;
     if let Some(id) = job_id {
-        sqlx::query("UPDATE backup_jobs SET last_update_id = ? WHERE id = ?").bind(update.id).bind(id).execute(&state.db).await?;
+        sqlx::query("UPDATE backup_jobs SET last_update_id = ? WHERE id = ?")
+            .bind(update.id)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
     Ok(update)
 }
@@ -428,10 +503,17 @@ async fn prune(state: &AppState, log: &UpdateLog, dest: &Destination, job: &JobR
     for b in old {
         match dest.delete(state, &b.remote_ref).await {
             Ok(()) => {
-                let _ = sqlx::query("DELETE FROM backups WHERE id = ?").bind(b.id).execute(&state.db).await;
-                log.line(format!("deleted old backup {}", b.file_name)).await;
+                let _ = sqlx::query("DELETE FROM backups WHERE id = ?")
+                    .bind(b.id)
+                    .execute(&state.db)
+                    .await;
+                log.line(format!("deleted old backup {}", b.file_name))
+                    .await;
             }
-            Err(e) => log.line(format!("couldn't delete old backup {}: {e:#}", b.file_name)).await,
+            Err(e) => {
+                log.line(format!("couldn't delete old backup {}: {e:#}", b.file_name))
+                    .await
+            }
         }
     }
 }
@@ -477,42 +559,75 @@ async fn restore(
     Json(input): Json<RestoreInput>,
 ) -> AppResult<Json<Update>> {
     let backup = get_backup(&state, id).await?;
-    let dest_id = backup.destination_id.ok_or_else(|| AppError::conflict("this backup's destination was removed"))?;
+    let dest_id = backup
+        .destination_id
+        .ok_or_else(|| AppError::conflict("this backup's destination was removed"))?;
     let dest = get_destination(&state.db, dest_id).await?;
     let volume = match input.volume.trim() {
         "" => backup.volume.clone(),
         v => v.to_string(),
     };
-    if !volume.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
-        || !volume.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    if !volume
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+        || !volume
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
     {
         return Err(AppError::bad_request("invalid volume name"));
     }
     let st = state.clone();
     let target = volume.clone();
-    let update = updates::spawn(&state, &user, "volume", &target, "restore", move |log| async move {
-        let lock = st.lock_for(&format!("volume:{volume}"));
-        let _guard = lock.lock().await;
-        log.set_detail(&backup.file_name).await;
-        log.line(format!("restoring {} from {} into volume {volume}", backup.file_name, dest.name)).await;
-        tokio::fs::create_dir_all(tmp_dir(&st)).await?;
-        let tmp = TempFile(tmp_dir(&st).join(format!("restore-{}-{}", backup.id, backup.file_name)));
-        log.line("downloading the backup").await;
-        dest.download(&st, &backup.remote_ref, &tmp.0).await?;
-        log.line(format!("downloaded {}", human(tokio::fs::metadata(&tmp.0).await?.len()))).await;
-        if st.docker.inspect_volume(&volume).await.is_err() {
-            log.line(format!("creating volume {volume}")).await;
-            st.docker
-                .create_volume(bollard::models::VolumeCreateRequest { name: Some(volume.clone()), ..Default::default() })
-                .await?;
-        }
-        // The read-only browser helper would show stale files.
-        crate::volume_browser::release(&st, &volume).await;
-        log.line("replacing the volume's contents").await;
-        with_stopped(&st, &log, &volume, input.stop_containers, restore_into(&st, &volume, &tmp.0)).await?;
-        log.line("restore complete").await;
-        Ok(())
-    })
+    let update = updates::spawn(
+        &state,
+        &user,
+        "volume",
+        &target,
+        "restore",
+        move |log| async move {
+            let lock = st.lock_for(&format!("volume:{volume}"));
+            let _guard = lock.lock().await;
+            log.set_detail(&backup.file_name).await;
+            log.line(format!(
+                "restoring {} from {} into volume {volume}",
+                backup.file_name, dest.name
+            ))
+            .await;
+            tokio::fs::create_dir_all(tmp_dir(&st)).await?;
+            let tmp =
+                TempFile(tmp_dir(&st).join(format!("restore-{}-{}", backup.id, backup.file_name)));
+            log.line("downloading the backup").await;
+            dest.download(&st, &backup.remote_ref, &tmp.0).await?;
+            log.line(format!(
+                "downloaded {}",
+                human(tokio::fs::metadata(&tmp.0).await?.len())
+            ))
+            .await;
+            if st.docker.inspect_volume(&volume).await.is_err() {
+                log.line(format!("creating volume {volume}")).await;
+                st.docker
+                    .create_volume(bollard::models::VolumeCreateRequest {
+                        name: Some(volume.clone()),
+                        ..Default::default()
+                    })
+                    .await?;
+            }
+            // The read-only browser helper would show stale files.
+            crate::volume_browser::release(&st, &volume).await;
+            log.line("replacing the volume's contents").await;
+            with_stopped(
+                &st,
+                &log,
+                &volume,
+                input.stop_containers,
+                restore_into(&st, &volume, &tmp.0),
+            )
+            .await?;
+            log.line("restore complete").await;
+            Ok(())
+        },
+    )
     .await?;
     Ok(Json(update))
 }
@@ -551,7 +666,10 @@ struct VolumeQuery {
     volume: Option<String>,
 }
 
-async fn list_backups(State(state): State<AppState>, Query(q): Query<VolumeQuery>) -> AppResult<Json<Vec<BackupRow>>> {
+async fn list_backups(
+    State(state): State<AppState>,
+    Query(q): Query<VolumeQuery>,
+) -> AppResult<Json<Vec<BackupRow>>> {
     Ok(Json(
         sqlx::query_as::<_, BackupRow>(
             "SELECT b.*, d.name AS destination_name, d.kind AS destination_kind FROM backups b
@@ -565,13 +683,19 @@ async fn list_backups(State(state): State<AppState>, Query(q): Query<VolumeQuery
 }
 
 /// Deletes the backup from its destination and forgets it.
-async fn delete_backup(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<Value>> {
+async fn delete_backup(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<Value>> {
     let backup = get_backup(&state, id).await?;
     if let Some(dest_id) = backup.destination_id {
         let dest = get_destination(&state.db, dest_id).await?;
         dest.delete(&state, &backup.remote_ref).await?;
     }
-    sqlx::query("DELETE FROM backups WHERE id = ?").bind(id).execute(&state.db).await?;
+    sqlx::query("DELETE FROM backups WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     Ok(Json(json!({ "deleted": id })))
 }
 
@@ -591,18 +715,23 @@ async fn run_once(
 ) -> AppResult<Json<Update>> {
     state.docker.inspect_volume(&volume).await?;
     let dest = get_destination(&state.db, input.destination_id).await?;
-    Ok(Json(start_backup(&state, &user, &volume, dest, None, input.stop_containers).await?))
+    Ok(Json(
+        start_backup(&state, &user, &volume, dest, None, input.stop_containers).await?,
+    ))
 }
 
 // ---- Jobs --------------------------------------------------------------------
 
 /// Next time `schedule` fires after now, as stored (UTC, like `now()`).
 fn next_run(schedule: &str) -> anyhow::Result<String> {
-    let cron = croner::Cron::from_str(schedule).map_err(|e| anyhow::anyhow!("invalid schedule: {e}"))?;
+    let cron =
+        croner::Cron::from_str(schedule).map_err(|e| anyhow::anyhow!("invalid schedule: {e}"))?;
     let next = cron
         .find_next_occurrence(&chrono::Local::now(), false)
         .map_err(|e| anyhow::anyhow!("schedule never fires: {e}"))?;
-    Ok(next.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+    Ok(next
+        .with_timezone(&chrono::Utc)
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 #[derive(Deserialize)]
@@ -612,19 +741,25 @@ struct ScheduleQuery {
 
 /// Describes a schedule and its next few runs, for the editor.
 async fn preview_schedule(Query(q): Query<ScheduleQuery>) -> AppResult<Json<Value>> {
-    let cron = croner::Cron::from_str(q.cron.trim()).map_err(|e| AppError::bad_request(format!("invalid schedule: {e}")))?;
+    let cron = croner::Cron::from_str(q.cron.trim())
+        .map_err(|e| AppError::bad_request(format!("invalid schedule: {e}")))?;
     let mut next = Vec::new();
     let mut from = chrono::Local::now();
     for _ in 0..3 {
         match cron.find_next_occurrence(&from, false) {
             Ok(t) => {
-                next.push(t.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+                next.push(
+                    t.with_timezone(&chrono::Utc)
+                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                );
                 from = t;
             }
             Err(_) => break,
         }
     }
-    Ok(Json(json!({ "description": cron.describe(), "next": next, "timezone": chrono::Local::now().format("UTC%:z").to_string() })))
+    Ok(Json(
+        json!({ "description": cron.describe(), "next": next, "timezone": chrono::Local::now().format("UTC%:z").to_string() }),
+    ))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -659,12 +794,17 @@ async fn job_view(state: &AppState, id: i64) -> AppResult<JobView> {
         .ok_or_else(|| AppError::not_found("backup job not found"))
 }
 
-async fn list_jobs(State(state): State<AppState>, Query(q): Query<VolumeQuery>) -> AppResult<Json<Vec<JobView>>> {
+async fn list_jobs(
+    State(state): State<AppState>,
+    Query(q): Query<VolumeQuery>,
+) -> AppResult<Json<Vec<JobView>>> {
     Ok(Json(
-        sqlx::query_as::<_, JobView>(sqlx::AssertSqlSafe(format!("{JOB_VIEW} WHERE (?1 IS NULL OR j.volume = ?1) ORDER BY j.volume, j.id")))
-            .bind(q.volume)
-            .fetch_all(&state.db)
-            .await?,
+        sqlx::query_as::<_, JobView>(sqlx::AssertSqlSafe(format!(
+            "{JOB_VIEW} WHERE (?1 IS NULL OR j.volume = ?1) ORDER BY j.volume, j.id"
+        )))
+        .bind(q.volume)
+        .fetch_all(&state.db)
+        .await?,
     ))
 }
 
@@ -692,13 +832,18 @@ fn default_true() -> bool {
 async fn check_job(state: &AppState, input: &JobInput) -> AppResult<Option<String>> {
     get_destination(&state.db, input.destination_id).await?;
     if !(0..=1000).contains(&input.keep) {
-        return Err(AppError::bad_request("keep must be between 0 (keep all) and 1000"));
+        return Err(AppError::bad_request(
+            "keep must be between 0 (keep all) and 1000",
+        ));
     }
     let next = next_run(input.schedule.trim()).map_err(|e| AppError::bad_request(e.to_string()))?;
     Ok(input.enabled.then_some(next))
 }
 
-async fn create_job(State(state): State<AppState>, Json(input): Json<JobInput>) -> AppResult<Json<JobView>> {
+async fn create_job(
+    State(state): State<AppState>,
+    Json(input): Json<JobInput>,
+) -> AppResult<Json<JobView>> {
     state.docker.inspect_volume(&input.volume).await?;
     let next = check_job(&state, &input).await?;
     let id = sqlx::query(
@@ -719,7 +864,11 @@ async fn create_job(State(state): State<AppState>, Json(input): Json<JobInput>) 
     Ok(Json(job_view(&state, id).await?))
 }
 
-async fn update_job(State(state): State<AppState>, Path(id): Path<i64>, Json(input): Json<JobInput>) -> AppResult<Json<JobView>> {
+async fn update_job(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<JobInput>,
+) -> AppResult<Json<JobView>> {
     let next = check_job(&state, &input).await?;
     let updated = sqlx::query(
         "UPDATE backup_jobs SET destination_id = ?, schedule = ?, keep = ?, stop_containers = ?, enabled = ?, next_run_at = ?
@@ -742,7 +891,10 @@ async fn update_job(State(state): State<AppState>, Path(id): Path<i64>, Json(inp
 
 /// Deletes the schedule; its backups are kept.
 async fn delete_job(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    sqlx::query("DELETE FROM backup_jobs WHERE id = ?").bind(id).execute(&state.db).await?;
+    sqlx::query("DELETE FROM backup_jobs WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     Ok(Json(json!({ "deleted": id })))
 }
 
@@ -754,7 +906,11 @@ async fn get_job(state: &AppState, id: i64) -> AppResult<JobRow> {
         .ok_or_else(|| AppError::not_found("backup job not found"))
 }
 
-async fn run_job(State(state): State<AppState>, Extension(user): Extension<User>, Path(id): Path<i64>) -> AppResult<Json<Update>> {
+async fn run_job(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<Update>> {
     let job = get_job(&state, id).await?;
     Ok(Json(run(&state, &user, job).await?))
 }
@@ -788,7 +944,11 @@ async fn run_due(state: &AppState) -> anyhow::Result<()> {
     .await?;
     for job in due {
         let next = next_run(&job.schedule).ok();
-        sqlx::query("UPDATE backup_jobs SET next_run_at = ? WHERE id = ?").bind(&next).bind(job.id).execute(&state.db).await?;
+        sqlx::query("UPDATE backup_jobs SET next_run_at = ? WHERE id = ?")
+            .bind(&next)
+            .bind(job.id)
+            .execute(&state.db)
+            .await?;
         let still_running = match job.last_update_id {
             Some(id) => sqlx::query_scalar::<_, String>("SELECT status FROM updates WHERE id = ?")
                 .bind(id)
@@ -798,7 +958,10 @@ async fn run_due(state: &AppState) -> anyhow::Result<()> {
             None => false,
         };
         if still_running {
-            tracing::info!("skipping backup of {}: the previous run is still going", job.volume);
+            tracing::info!(
+                "skipping backup of {}: the previous run is still going",
+                job.volume
+            );
             continue;
         }
         tracing::info!("starting scheduled backup of {}", job.volume);
@@ -827,12 +990,27 @@ mod tests {
     #[ignore]
     async fn exec_delivers_stdin_eof() {
         let docker = Docker::connect_with_local_defaults().unwrap();
-        let helper = Helper::start_on(&docker, HelperSpec { image: ARCHIVE_IMAGE, volume: None, network: false }).await.unwrap();
+        let helper = Helper::start_on(
+            &docker,
+            HelperSpec {
+                image: ARCHIVE_IMAGE,
+                volume: None,
+                network: false,
+            },
+        )
+        .await
+        .unwrap();
         let path = std::env::temp_dir().join("harbor-eof-test");
         tokio::fs::write(&path, vec![b'x'; 70_000]).await.unwrap();
         let input = tokio::fs::File::open(&path).await.unwrap();
         let cmd = vec!["wc".into(), "-c".into()];
-        let (out, _, code) = tokio::time::timeout(Duration::from_secs(20), helper.exec(cmd, vec![], Some(input), None)).await.unwrap().unwrap();
+        let (out, _, code) = tokio::time::timeout(
+            Duration::from_secs(20),
+            helper.exec(cmd, vec![], Some(input), None),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!((String::from_utf8_lossy(&out).trim(), code), ("70000", 0));
     }
 

@@ -49,7 +49,10 @@ fn clean_name(name: &str) -> AppResult<String> {
     Ok(name.to_string())
 }
 
-async fn create_group(State(state): State<AppState>, Json(body): Json<NewGroup>) -> AppResult<Json<Group>> {
+async fn create_group(
+    State(state): State<AppState>,
+    Json(body): Json<NewGroup>,
+) -> AppResult<Json<Group>> {
     let name = clean_name(&body.name)?;
     Ok(Json(
         sqlx::query_as::<_, Group>(
@@ -67,7 +70,11 @@ struct GroupPatch {
     collapsed: Option<bool>,
 }
 
-async fn update_group(State(state): State<AppState>, Path(id): Path<i64>, Json(body): Json<GroupPatch>) -> AppResult<Json<Group>> {
+async fn update_group(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<GroupPatch>,
+) -> AppResult<Json<Group>> {
     let name = body.name.as_deref().map(clean_name).transpose()?;
     sqlx::query_as::<_, Group>(
         "UPDATE canvas_groups SET name = COALESCE(?, name), collapsed = COALESCE(?, collapsed) WHERE id = ? RETURNING *",
@@ -86,7 +93,10 @@ struct Order {
     ids: Vec<i64>,
 }
 
-async fn reorder_groups(State(state): State<AppState>, Json(body): Json<Order>) -> AppResult<Json<Vec<Group>>> {
+async fn reorder_groups(
+    State(state): State<AppState>,
+    Json(body): Json<Order>,
+) -> AppResult<Json<Vec<Group>>> {
     let mut tx = state.db.begin().await?;
     for (position, id) in body.ids.iter().enumerate() {
         sqlx::query("UPDATE canvas_groups SET position = ? WHERE id = ?")
@@ -100,11 +110,23 @@ async fn reorder_groups(State(state): State<AppState>, Json(body): Json<Order>) 
 }
 
 /// Deletes the group; its services move back to the ungrouped section.
-async fn delete_group(State(state): State<AppState>, Path(id): Path<i64>) -> AppResult<Json<serde_json::Value>> {
+async fn delete_group(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<serde_json::Value>> {
     let mut tx = state.db.begin().await?;
-    sqlx::query("UPDATE stacks SET group_id = NULL WHERE group_id = ?").bind(id).execute(&mut *tx).await?;
-    sqlx::query("UPDATE deployments SET group_id = NULL WHERE group_id = ?").bind(id).execute(&mut *tx).await?;
-    let deleted = sqlx::query("DELETE FROM canvas_groups WHERE id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE stacks SET group_id = NULL WHERE group_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE deployments SET group_id = NULL WHERE group_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let deleted = sqlx::query("DELETE FROM canvas_groups WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     if deleted.rows_affected() == 0 {
         return Err(AppError::not_found("group not found"));
@@ -130,26 +152,32 @@ async fn update_item(
     Json(body): Json<ItemPatch>,
 ) -> AppResult<Json<serde_json::Value>> {
     const STACKS: &str = "UPDATE stacks SET pinned = COALESCE(?, pinned), group_id = CASE WHEN ? THEN ? ELSE group_id END WHERE name = ?";
-    const DEPLOYMENTS: &str =
-        "UPDATE deployments SET pinned = COALESCE(?, pinned), group_id = CASE WHEN ? THEN ? ELSE group_id END WHERE name = ?";
+    const DEPLOYMENTS: &str = "UPDATE deployments SET pinned = COALESCE(?, pinned), group_id = CASE WHEN ? THEN ? ELSE group_id END WHERE name = ?";
     let sql = match kind.as_str() {
         "stack" => STACKS,
         "deployment" => DEPLOYMENTS,
-        _ => return Err(AppError::bad_request("kind must be 'stack' or 'deployment'")),
+        _ => {
+            return Err(AppError::bad_request(
+                "kind must be 'stack' or 'deployment'",
+            ));
+        }
     };
     if let Some(Some(group)) = body.group_id {
-        let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM canvas_groups WHERE id = ?").bind(group).fetch_optional(&state.db).await?;
+        let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM canvas_groups WHERE id = ?")
+            .bind(group)
+            .fetch_optional(&state.db)
+            .await?;
         if exists.is_none() {
             return Err(AppError::not_found("group not found"));
         }
     }
     let result = sqlx::query(sql)
-    .bind(body.pinned)
-    .bind(body.group_id.is_some())
-    .bind(body.group_id.flatten())
-    .bind(&name)
-    .execute(&state.db)
-    .await?;
+        .bind(body.pinned)
+        .bind(body.group_id.is_some())
+        .bind(body.group_id.flatten())
+        .bind(&name)
+        .execute(&state.db)
+        .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::not_found(format!("{kind} '{name}' not found")));
     }

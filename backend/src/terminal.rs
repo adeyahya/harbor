@@ -65,7 +65,9 @@ fn shell_command(shell: &str) -> AppResult<Vec<String>> {
             "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi".into(),
         ]),
         s if SHELLS.contains(&s) => Ok(vec![s.into()]),
-        _ => Err(AppError::bad_request(format!("unsupported shell '{shell}'"))),
+        _ => Err(AppError::bad_request(format!(
+            "unsupported shell '{shell}'"
+        ))),
     }
 }
 
@@ -77,7 +79,12 @@ fn same_origin(headers: &HeaderMap) -> bool {
         return true;
     };
     let origin_host = origin.split_once("://").map(|(_, h)| h).unwrap_or(origin);
-    let host_of = |name: &str| headers.get(name).and_then(|h| h.to_str().ok()).map(|h| h.split(',').next().unwrap_or("").trim().to_string());
+    let host_of = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|h| h.to_str().ok())
+            .map(|h| h.split(',').next().unwrap_or("").trim().to_string())
+    };
     [host_of("x-forwarded-host"), host_of(header::HOST.as_str())]
         .into_iter()
         .flatten()
@@ -93,17 +100,35 @@ pub async fn open(
     ws: WebSocketUpgrade,
 ) -> AppResult<Response> {
     if !same_origin(&headers) {
-        return Err(AppError::new(axum::http::StatusCode::FORBIDDEN, "cross-origin terminal requests are not allowed"));
+        return Err(AppError::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "cross-origin terminal requests are not allowed",
+        ));
     }
     let cmd = shell_command(q.shell.trim())?;
     let exec_user = q.user.trim().to_string();
-    if exec_user.chars().any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '.'))) {
+    if exec_user
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '.')))
+    {
         return Err(AppError::bad_request("user must be a name or uid[:gid]"));
     }
     let container = state.docker.inspect_container(&id, None).await?;
-    let name = container.name.as_deref().unwrap_or(&id).trim_start_matches('/').to_string();
-    let running = container.state.as_ref().and_then(|s| s.running).unwrap_or(false);
-    let size = (q.cols.unwrap_or(80).clamp(10, 500), q.rows.unwrap_or(24).clamp(5, 300));
+    let name = container
+        .name
+        .as_deref()
+        .unwrap_or(&id)
+        .trim_start_matches('/')
+        .to_string();
+    let running = container
+        .state
+        .as_ref()
+        .and_then(|s| s.running)
+        .unwrap_or(false);
+    let size = (
+        q.cols.unwrap_or(80).clamp(10, 500),
+        q.rows.unwrap_or(24).clamp(5, 300),
+    );
 
     Ok(ws.on_upgrade(move |mut socket| async move {
         if !running {
@@ -167,13 +192,31 @@ async fn session(
             },
         )
         .await?;
-    let StartExecResults::Attached { mut output, mut input } =
-        docker.start_exec(&exec.id, Some(StartExecOptions { tty: true, ..Default::default() })).await?
+    let StartExecResults::Attached {
+        mut output,
+        mut input,
+    } = docker
+        .start_exec(
+            &exec.id,
+            Some(StartExecOptions {
+                tty: true,
+                ..Default::default()
+            }),
+        )
+        .await?
     else {
         anyhow::bail!("the shell didn't attach");
     };
     // The exec only accepts a size once it's running.
-    let _ = docker.resize_exec(&exec.id, ResizeExecOptions { width: cols, height: rows }).await;
+    let _ = docker
+        .resize_exec(
+            &exec.id,
+            ResizeExecOptions {
+                width: cols,
+                height: rows,
+            },
+        )
+        .await;
 
     loop {
         tokio::select! {
@@ -202,7 +245,12 @@ async fn session(
             },
         }
     }
-    let code = docker.inspect_exec(&exec.id).await.ok().and_then(|e| e.exit_code).unwrap_or(0);
+    let code = docker
+        .inspect_exec(&exec.id)
+        .await
+        .ok()
+        .and_then(|e| e.exit_code)
+        .unwrap_or(0);
     send_json(socket, json!({ "type": "exit", "code": code })).await;
     Ok(Some(code))
 }
@@ -223,8 +271,14 @@ mod tests {
     #[test]
     fn checks_origin_against_host() {
         assert!(same_origin(&headers(&[("host", "harbor.example.com")])));
-        assert!(same_origin(&headers(&[("host", "10.0.0.2:9120"), ("origin", "http://10.0.0.2:9120")])));
-        assert!(!same_origin(&headers(&[("host", "10.0.0.2:9120"), ("origin", "http://evil.example.com")])));
+        assert!(same_origin(&headers(&[
+            ("host", "10.0.0.2:9120"),
+            ("origin", "http://10.0.0.2:9120")
+        ])));
+        assert!(!same_origin(&headers(&[
+            ("host", "10.0.0.2:9120"),
+            ("origin", "http://evil.example.com")
+        ])));
         assert!(same_origin(&headers(&[
             ("host", "127.0.0.1:9120"),
             ("x-forwarded-host", "harbor.example.com"),

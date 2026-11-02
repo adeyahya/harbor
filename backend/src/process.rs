@@ -15,7 +15,9 @@ use crate::updates::UpdateLog;
 /// is the command line echoed into the log (keep secrets out of it).
 pub async fn run(log: &UpdateLog, mut cmd: Command, shown: &str) -> anyhow::Result<()> {
     log.line(format!("$ {shown}")).await;
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let program = cmd.as_std().get_program().to_string_lossy().into_owned();
     let mut child = cmd
         .spawn()
@@ -84,7 +86,10 @@ fn strip_ansi(s: &str) -> String {
 mod tests {
     #[test]
     fn strips_ansi() {
-        assert_eq!(super::strip_ansi("\u{1b}[33m1 warning\u{1b}[0m found"), "1 warning found");
+        assert_eq!(
+            super::strip_ansi("\u{1b}[33m1 warning\u{1b}[0m found"),
+            "1 warning found"
+        );
         assert_eq!(super::strip_ansi("plain"), "plain");
     }
 }

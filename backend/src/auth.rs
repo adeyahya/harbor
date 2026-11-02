@@ -113,13 +113,14 @@ async fn setup(
         .hash_password(creds.password.as_bytes())
         .map_err(|e| anyhow::anyhow!("hashing password: {e}"))?
         .to_string();
-    let id = sqlx::query("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
-        .bind(username)
-        .bind(hash)
-        .bind(now())
-        .execute(&state.db)
-        .await?
-        .last_insert_rowid();
+    let id =
+        sqlx::query("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
+            .bind(username)
+            .bind(hash)
+            .bind(now())
+            .execute(&state.db)
+            .await?
+            .last_insert_rowid();
     let user = User {
         id,
         username: username.to_string(),
@@ -138,7 +139,12 @@ async fn login(
             .bind(creds.username.trim())
             .fetch_optional(&state.db)
             .await?;
-    let invalid = || AppError::new(axum::http::StatusCode::UNAUTHORIZED, "invalid username or password");
+    let invalid = || {
+        AppError::new(
+            axum::http::StatusCode::UNAUTHORIZED,
+            "invalid username or password",
+        )
+    };
     let (id, username, hash) = row.ok_or_else(invalid)?;
     Argon2::default()
         .verify_password(creds.password.as_bytes(), hash.as_str())

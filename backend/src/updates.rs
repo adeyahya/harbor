@@ -64,7 +64,9 @@ enum Cancel {
     Allowed,
     /// The operation is in a step that must not be cut short.
     Blocked,
-    Requested { by: String },
+    Requested {
+        by: String,
+    },
 }
 
 /// Updates that are still running, so they can be cancelled.
@@ -204,7 +206,12 @@ where
     let (tx, rx) = mpsc::unbounded_channel();
     let writer = tokio::spawn(write_logs(db.clone(), id, rx));
     let cancel = Arc::new(Mutex::new(Cancel::Allowed));
-    let log = UpdateLog { db: db.clone(), id, tx, cancel: cancel.clone() };
+    let log = UpdateLog {
+        db: db.clone(),
+        id,
+        tx,
+        cancel: cancel.clone(),
+    };
     let running = state.running.clone();
     // Hold the registry while spawning so a cancel can't miss the task.
     let task = {
@@ -280,7 +287,11 @@ pub fn router() -> Router<AppState> {
 /// Aborts a running update. Its child processes (git, docker build, compose)
 /// are killed as the task is dropped, and its resource lock is released so
 /// queued operations go ahead.
-async fn cancel(State(state): State<AppState>, Extension(user): Extension<User>, Path(id): Path<i64>) -> AppResult<Json<Update>> {
+async fn cancel(
+    State(state): State<AppState>,
+    Extension(user): Extension<User>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<Update>> {
     {
         let map = state.running.0.lock().expect("running poisoned");
         let Some((handle, cancel)) = map.get(&id) else {
@@ -289,11 +300,15 @@ async fn cancel(State(state): State<AppState>, Extension(user): Extension<User>,
         let mut c = cancel.lock().expect("cancel poisoned");
         match &*c {
             Cancel::Blocked => {
-                return Err(AppError::conflict("this operation is replacing its container and can't be cancelled now; try again in a moment"));
+                return Err(AppError::conflict(
+                    "this operation is replacing its container and can't be cancelled now; try again in a moment",
+                ));
             }
             Cancel::Requested { .. } => {}
             Cancel::Allowed => {
-                *c = Cancel::Requested { by: user.username.clone() };
+                *c = Cancel::Requested {
+                    by: user.username.clone(),
+                };
                 handle.abort();
             }
         }
@@ -301,7 +316,10 @@ async fn cancel(State(state): State<AppState>, Extension(user): Extension<User>,
     get_one(State(state), Path(id)).await
 }
 
-async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> AppResult<Json<Vec<Update>>> {
+async fn list(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> AppResult<Json<Vec<Update>>> {
     // The list omits logs to keep payloads small; fetch a single update for its log.
     let rows = sqlx::query_as::<_, Update>(
         "SELECT id, operation, target_type, target_name, status, '' AS log, username, started_at, finished_at, detail,

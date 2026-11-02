@@ -803,15 +803,18 @@ async fn build_and_deploy(
     // The label keeps builds out of "prune unused images" so they stay
     // available for rollback.
     let labels = [format!("{LABEL}={}", d.name)];
+    let tags = [tag.clone(), format!("{repo}:latest")];
     git::build(
         log,
-        &checkout,
-        &d.build_context,
-        &d.dockerfile,
-        &build_args,
-        &[tag.clone(), format!("{repo}:latest")],
-        &labels,
-        rebuild,
+        git::ImageBuild {
+            checkout: &checkout,
+            context: &d.build_context,
+            dockerfile: &d.dockerfile,
+            build_args: &build_args,
+            tags: &tags,
+            labels: &labels,
+            pull: rebuild,
+        },
     )
     .await?;
     finish_git_deploy(state, log, d, &commit, &tag).await

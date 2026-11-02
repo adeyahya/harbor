@@ -1,0 +1,65 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Image name and tags
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          name="ghcr.io/$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          if [ "$REF_TYPE" = "tag" ]; then
+            safe=$(echo "$REF_NAME" | tr '/' '-')
+            {
+              echo "tags<<EOF"
+              echo "${name}:${safe}"
+              echo "${name}:latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${name}:ci" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Publish only when a tag is pushed. Pull requests and branch pushes
+      # still build the image, so a broken Dockerfile fails CI. Login uses
+      # the job's GITHUB_TOKEN; no extra registry secret is required.
+      - name: Login to GHCR
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+          tags: ${{ steps.image.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

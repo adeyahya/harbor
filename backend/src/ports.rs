@@ -207,3 +207,18 @@ async fn ports(
         suggestions,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_entry;
+
+    #[test]
+    fn parses_checked_port_entries() {
+        assert_eq!(parse_entry("8080"), Some((8080, "tcp".into())));
+        assert_eq!(parse_entry(" 53/UDP "), Some((53, "udp".into())));
+        assert_eq!(parse_entry("80/sctp"), Some((80, "sctp".into())));
+        assert_eq!(parse_entry("nope"), None);
+        assert_eq!(parse_entry("70000/tcp"), None);
+        assert_eq!(parse_entry(""), None);
+    }
+}

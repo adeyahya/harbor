@@ -1,5 +1,40 @@
+# Build output
 target/
 node_modules/
 dist/
+*.tsbuildinfo
+
+# Local Harbor state (SQLite database, stack files, checkouts)
 data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+
+# Secrets and credentials. Never commit these.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.p8
+id_rsa
+id_ed25519
+id_ecdsa
+credentials.json
+client_secret*.json
+*-credentials.json
+rclone.conf
+*.kubeconfig
+
+# Editor and OS
 .DS_Store
+.idea/
+.vscode/
+*.swp
+*~

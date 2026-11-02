@@ -358,50 +358,57 @@ pub fn validate_rel_path(path: &str, what: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Arguments for `docker build` of a checkout. Grouped so the build call
+/// stays readable as options are added.
+pub struct ImageBuild<'a> {
+    pub checkout: &'a Path,
+    pub context: &'a str,
+    pub dockerfile: &'a str,
+    pub build_args: &'a [String],
+    pub tags: &'a [String],
+    pub labels: &'a [String],
+    pub pull: bool,
+}
+
 /// Builds the image with the Dockerfile at `<context>/<dockerfile>`, tagging
 /// it with each of `tags`.
-pub async fn build(
-    log: &UpdateLog,
-    checkout: &Path,
-    context: &str,
-    dockerfile: &str,
-    build_args: &[String],
-    tags: &[String],
-    labels: &[String],
-    pull: bool,
-) -> anyhow::Result<()> {
-    validate_rel_path(context, "root directory").map_err(anyhow::Error::msg)?;
-    validate_rel_path(dockerfile, "Dockerfile path").map_err(anyhow::Error::msg)?;
-    let file = Path::new(context).join(dockerfile);
-    if !checkout.join(&file).is_file() {
+pub async fn build(log: &UpdateLog, build: ImageBuild<'_>) -> anyhow::Result<()> {
+    validate_rel_path(build.context, "root directory").map_err(anyhow::Error::msg)?;
+    validate_rel_path(build.dockerfile, "Dockerfile path").map_err(anyhow::Error::msg)?;
+    let file = Path::new(build.context).join(build.dockerfile);
+    if !build.checkout.join(&file).is_file() {
         anyhow::bail!("no Dockerfile at {} in the repository", file.display());
     }
 
     let mut cmd = Command::new("docker");
     cmd.arg("build").arg("-f").arg(&file);
     // Check the registry for newer base images instead of using local ones.
-    if pull {
+    if build.pull {
         cmd.arg("--pull");
     }
-    for tag in tags {
+    for tag in build.tags {
         cmd.args(["-t", tag]);
     }
-    for arg in build_args {
+    for arg in build.build_args {
         cmd.args(["--build-arg", arg]);
     }
-    for label in labels {
+    for label in build.labels {
         cmd.args(["--label", label]);
     }
-    cmd.arg(context)
-        .current_dir(checkout)
+    cmd.arg(build.context)
+        .current_dir(build.checkout)
         .env("DOCKER_BUILDKIT", "1")
         .env("BUILDKIT_PROGRESS", "plain");
     let shown = format!(
         "docker build{} -f {} {}{}",
-        if pull { " --pull" } else { "" },
+        if build.pull { " --pull" } else { "" },
         file.display(),
-        tags.iter().map(|t| format!("-t {t} ")).collect::<String>(),
-        context
+        build
+            .tags
+            .iter()
+            .map(|t| format!("-t {t} "))
+            .collect::<String>(),
+        build.context
     );
     process::run(log, cmd, &shown).await
 }

@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in Harbor does not behave as documented.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Do not include tokens, passwords, OAuth secrets, or the contents of `harbor.db`.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what Harbor did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a deployment from ...
+        2. Deploy
+        3. See the error in Activity
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Harbor version or commit
+      placeholder: main @ abc1234, or a GHCR tag
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How Harbor is running
+      options:
+        - Docker Compose
+        - cargo run on the host
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant Activity output or `docker compose logs`. Redact hostnames, tokens, and environment values.
+      render: text

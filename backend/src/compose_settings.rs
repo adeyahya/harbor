@@ -153,6 +153,52 @@ async fn load_config(
         }
     }
 
+    // Variables required with `${VAR:?message}` usually live in a `.env`
+    // that isn't committed. Each one compose stops at gets a placeholder and
+    // compose runs again; the placeholders are blanked afterwards and the
+    // variables reported, so they can be filled in under Variables.
+    let mut required: Vec<String> = Vec::new();
+    let (stdout, stderr) = loop {
+        let out = compose_config(scratch, files, project, &required).await?;
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        if out.status.success() {
+            break (out.stdout, stderr);
+        }
+        match missing_required_var(&stderr) {
+            Some(var) if required.len() < 50 && !required.contains(&var) => required.push(var),
+            _ => {
+                let scratch_str = scratch.to_string_lossy();
+                let clean = stderr.replace(&format!("{scratch_str}/"), "");
+                anyhow::bail!("docker compose couldn't read the files: {}", clean.trim());
+            }
+        }
+    };
+    let scratch_str = scratch.to_string_lossy();
+    let clean = |s: &str| s.replace(&format!("{scratch_str}/"), "").trim().to_string();
+    let mut config: Value = serde_json::from_slice(&stdout)?;
+    blank_placeholders(&mut config);
+    let mut warnings: Vec<String> = stderr
+        .lines()
+        .map(clean)
+        .filter(|l| !l.is_empty())
+        .collect();
+    for var in &required {
+        warnings.push(format!(
+            "{var} is required but isn't set in the repository; fill it in under Variables"
+        ));
+    }
+    Ok((config, env_files, warnings))
+}
+
+/// Prefix of the placeholder given to required variables that have no value.
+const PLACEHOLDER: &str = "__HARBOR_REQUIRED_";
+
+async fn compose_config(
+    scratch: &Path,
+    files: &[String],
+    project: &str,
+    required: &[String],
+) -> anyhow::Result<std::process::Output> {
     // A clean environment, so Harbor's own variables never end up in the
     // prefilled settings; the repository's `.env` still applies.
     let mut cmd = Command::new("docker");
@@ -161,6 +207,9 @@ async fn load_config(
         if let Some(v) = std::env::var_os(key) {
             cmd.env(key, v);
         }
+    }
+    for var in required {
+        cmd.env(var, format!("{PLACEHOLDER}{var}__"));
     }
     cmd.args(["compose", "-p", project]);
     for f in files {
@@ -175,23 +224,35 @@ async fn load_config(
     ])
     .current_dir(scratch)
     .kill_on_drop(true);
-    let out = cmd
-        .output()
+    cmd.output()
         .await
-        .map_err(|e| anyhow::anyhow!("failed to run `docker compose`: {e}"))?;
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let scratch_str = scratch.to_string_lossy();
-    let clean = |s: &str| s.replace(&format!("{scratch_str}/"), "").trim().to_string();
-    if !out.status.success() {
-        anyhow::bail!("docker compose couldn't read the files: {}", clean(&stderr));
-    }
-    let config: Value = serde_json::from_slice(&out.stdout)?;
-    let warnings = stderr
-        .lines()
-        .map(clean)
-        .filter(|l| !l.is_empty())
+        .map_err(|e| anyhow::anyhow!("failed to run `docker compose`: {e}"))
+}
+
+/// The variable in compose's "required variable X is missing a value" error.
+fn missing_required_var(stderr: &str) -> Option<String> {
+    let rest = stderr.split("required variable ").nth(1)?;
+    let var: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
         .collect();
-    Ok((config, env_files, warnings))
+    (!var.is_empty() && rest[var.len()..].starts_with(" is missing a value")).then_some(var)
+}
+
+/// Removes the placeholders of required variables from every string.
+fn blank_placeholders(v: &mut Value) {
+    match v {
+        Value::String(s) => {
+            while let Some(start) = s.find(PLACEHOLDER) {
+                let after = start + PLACEHOLDER.len();
+                let end = s[after..].find("__").map_or(s.len(), |i| after + i + 2);
+                s.replace_range(start..end, "");
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(blank_placeholders),
+        Value::Object(map) => map.values_mut().for_each(blank_placeholders),
+        _ => {}
+    }
 }
 
 /// `.env`, `app.env`, `.env.production` and the like.
@@ -541,6 +602,7 @@ fn map_service(
         .into_iter()
         .flatten()
         .map(str_of)
+        .filter(|g| !g.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -667,6 +729,32 @@ mod tests {
         assert_eq!(s.image, "postgres:16");
         assert_eq!(s.restart, "on-failure");
         assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    }
+
+    #[test]
+    fn handles_required_variables() {
+        let err = "Error while interpolating services.p2play.environment.BETTER_AUTH_SECRET: \
+                   required variable BETTER_AUTH_SECRET is missing a value: set it in .env";
+        assert_eq!(
+            missing_required_var(err).as_deref(),
+            Some("BETTER_AUTH_SECRET")
+        );
+        assert_eq!(
+            missing_required_var("service \"x\" has neither an image nor a build"),
+            None
+        );
+        let mut v = json!({
+            "environment": {
+                "SECRET": "__HARBOR_REQUIRED_SECRET__",
+                "URL": "https://__HARBOR_REQUIRED_HOST__/api"
+            },
+            "group_add": ["__HARBOR_REQUIRED_GID__", "44"]
+        });
+        blank_placeholders(&mut v);
+        assert_eq!(
+            v,
+            json!({ "environment": { "SECRET": "", "URL": "https:///api" }, "group_add": ["", "44"] })
+        );
     }
 
     #[test]

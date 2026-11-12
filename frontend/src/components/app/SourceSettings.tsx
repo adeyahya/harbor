@@ -278,7 +278,7 @@ export function AutoDeploySettings({
   )
 }
 
-export type StackSourceConfig = Pick<Stack, 'source' | 'git_url' | 'git_branch' | 'compose_path' | 'project_dir' | 'git_account_id'>
+export type StackSourceConfig = Pick<Stack, 'source' | 'git_url' | 'git_branch' | 'compose_path' | 'compose_overrides' | 'project_dir' | 'git_account_id'>
 
 /** Inline compose vs. git repository for a stack, plus its project directory. */
 export function StackSourceSettings({
@@ -332,6 +332,20 @@ export function StackSourceSettings({
             </div>
             <Field label="Compose file" hint="Path inside the repository. Relative paths in it resolve against its folder." htmlFor="st-path">
               <Input id="st-path" value={config.compose_path} onChange={(e) => set('compose_path')(e.target.value)} placeholder="compose.yaml" className="font-mono" />
+            </Field>
+            <Field
+              label="Additional compose files"
+              hint="One path per line, applied in order on top of the compose file, like docker compose -f compose.yaml -f override.yaml. Use it for override files that add devices or hardware acceleration. Services with a build: section are rebuilt on every deploy."
+              htmlFor="st-overrides"
+            >
+              <Textarea
+                id="st-overrides"
+                value={config.compose_overrides}
+                onChange={(e) => set('compose_overrides')(e.target.value)}
+                placeholder="docker-compose.gpu.yml"
+                className="min-h-16 font-mono"
+                rows={2}
+              />
             </Field>
             <AccountField
               url={config.git_url}

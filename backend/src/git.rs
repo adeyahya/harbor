@@ -341,6 +341,81 @@ pub async fn default_branch(url: &str, token: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("couldn't determine the repository's default branch"))
 }
 
+/// Paths of every file at the head of `branch`, without downloading file
+/// contents: a shallow, blobless clone into `scratch`, which is removed after.
+pub async fn list_files(
+    url: &str,
+    branch: &str,
+    token: &str,
+    scratch: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let result = sparse_checkout(url, branch, token, scratch, |_| false).await;
+    tokio::fs::remove_dir_all(scratch).await.ok();
+    result
+}
+
+/// Clones the head of `branch` into `dest` without file contents, then
+/// checks out only the paths `want` accepts. Returns every path in the
+/// repository. The caller removes `dest`.
+pub async fn sparse_checkout(
+    url: &str,
+    branch: &str,
+    token: &str,
+    dest: &Path,
+    want: impl Fn(&str) -> bool,
+) -> anyhow::Result<Vec<String>> {
+    let mut cmd = git(token);
+    cmd.args([
+        "clone",
+        "--quiet",
+        "--depth",
+        "1",
+        "--filter=blob:none",
+        "--no-checkout",
+        "--single-branch",
+        "--branch",
+        branch,
+        "--",
+        url,
+    ])
+    .arg(dest);
+    process::output(cmd).await?;
+    let mut ls = git(token);
+    ls.args(["ls-tree", "-r", "--name-only", "HEAD"])
+        .current_dir(dest);
+    let all: Vec<String> = process::output(ls)
+        .await?
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let wanted: Vec<&String> = all.iter().filter(|p| want(p)).collect();
+    if !wanted.is_empty() {
+        let mut co = git(token);
+        co.args(["checkout", "HEAD", "--"])
+            .args(wanted)
+            .current_dir(dest);
+        process::output(co).await?;
+    }
+    Ok(all)
+}
+
+/// Whether a file name is a Docker Compose file: `compose.yaml`,
+/// `docker-compose.yml`, or a variant like `docker-compose.rockchip.yml`.
+pub fn is_compose_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let Some(stem) = name
+        .strip_suffix(".yml")
+        .or_else(|| name.strip_suffix(".yaml"))
+    else {
+        return false;
+    };
+    let stem = stem.strip_prefix("docker-").unwrap_or(stem);
+    stem == "compose"
+        || stem
+            .strip_prefix("compose")
+            .is_some_and(|rest| rest.starts_with(['.', '-', '_']) && rest.len() > 1)
+}
+
 /// Rejects absolute paths and `..` so build paths stay inside the checkout.
 pub fn validate_rel_path(path: &str, what: &str) -> Result<(), String> {
     let p = Path::new(path);
@@ -432,6 +507,32 @@ pub fn verify_signature(secret: &str, body: &[u8], header: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_compose_files() {
+        for yes in [
+            "compose.yaml",
+            "compose.yml",
+            "docker-compose.yml",
+            "docker-compose.rockchip.yml",
+            "deploy/compose.prod.yaml",
+            "docker-compose-gpu.yaml",
+            "docker-compose.override.yml",
+        ] {
+            assert!(is_compose_file(yes), "{yes}");
+        }
+        for no in [
+            "compose.json",
+            "docker-compose",
+            "composer.yml",
+            "compose..yml",
+            "docker-compose.yml.bak",
+            ".github/workflows/ci.yml",
+            "my-compose.yml",
+        ] {
+            assert!(!is_compose_file(no), "{no}");
+        }
+    }
 
     #[test]
     fn normalizes_urls() {

@@ -4,6 +4,7 @@ mod auth;
 mod backup_destinations;
 mod backups;
 mod canvas;
+mod compose_settings;
 mod deployments;
 mod docker;
 mod error;
@@ -21,7 +22,10 @@ mod volume_browser;
 use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::Context;
-use axum::{Router, middleware, routing::get};
+use axum::{
+    Router, middleware,
+    routing::{get, post},
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
@@ -92,6 +96,8 @@ async fn main() -> anyhow::Result<()> {
         .nest("/system", system::router())
         .nest("/docker", docker::router())
         .nest("/stacks", stacks::router())
+        .route("/git/compose-files", post(stacks::compose_files))
+        .route("/git/compose-settings", post(compose_settings::prefill))
         .nest("/deployments", deployments::router())
         .nest("/ports", ports::router())
         .nest("/canvas", canvas::router())

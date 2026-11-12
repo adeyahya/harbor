@@ -180,6 +180,8 @@ export interface Stack {
   has_token: boolean
   /** Compose file path inside the repository. */
   compose_path: string
+  /** Extra compose files applied after `compose_path`, one path per line. */
+  compose_overrides: string
   auto_deploy: boolean
   webhook_secret: string
   last_commit: string
@@ -232,6 +234,10 @@ export interface Deployment {
   adopted_container: string
   /** Extra container labels, KEY=value per line. */
   labels: string
+  /** Host devices, `/dev/host[:/dev/container[:rwm]]` per line. */
+  devices: string
+  /** Extra groups for the container's user, one per line. */
+  group_add: string
   pinned: boolean
   group_id: number | null
   /** null = automatic (account for the repo's host), 0 = none. */

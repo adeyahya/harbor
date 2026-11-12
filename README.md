@@ -42,7 +42,10 @@ Tagged releases are published to `ghcr.io/adeyahya/harbor` (the tag, and `latest
   groups (⋯ on a card); the layout is stored on the server.
 - **Stacks**: Docker Compose projects. The compose file is either edited in the
   UI or comes from a **git repository** (with auto-deploy on push, like
-  deployments). Variables are written to a `.env` file; deploy, pull, restart,
+  deployments). A git stack can layer extra compose files on the main one,
+  like `docker compose -f docker-compose.yml -f docker-compose.gpu.yml`, for
+  overrides that add devices for hardware acceleration; services with a
+  `build:` section are rebuilt on every deploy. Variables are written to a `.env` file; deploy, pull, restart,
   stop or take them down. Stacks can run from a chosen project directory so
   relative paths in the compose file keep working.
 - **Deployments**: single containers with ports, volumes, environment,
@@ -53,6 +56,15 @@ Tagged releases are published to `ghcr.io/adeyahya/harbor` (the tag, and `latest
     `harbor/<name>:<commit>`, and recreates the container. Optional root
     directory, Dockerfile path, build args, and an access token for private
     repos. With **auto-deploy** on, new commits are deployed automatically.
+
+  **Prefill from a compose file**: when creating a deployment from a
+  repository, Harbor can read its compose files (plus override files such
+  as `docker-compose.rockchip.yml`, merged as `docker compose -f … -f …`
+  would) and fill in the build settings, ports, variables, volumes,
+  devices, groups, labels and restart policy of the service you pick.
+  Anything a single container can't express (other services, relative bind
+  mounts, `security_opt`, …) is listed before you create it. Deployments
+  can pass host **devices** (e.g. `/dev/dri`) for hardware acceleration.
 
   The port editor flags host ports already taken (by a container, Harbor, or
   another process), suggests free ones, and offers the ports the image

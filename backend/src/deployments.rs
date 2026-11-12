@@ -16,8 +16,8 @@ use axum::{
 use bollard::{
     Docker,
     models::{
-        ContainerCreateBody, ContainerInspectResponse, HostConfig, PortBinding, PortMap,
-        RestartPolicy, RestartPolicyNameEnum,
+        ContainerCreateBody, ContainerInspectResponse, DeviceMapping, HostConfig, PortBinding,
+        PortMap, RestartPolicy, RestartPolicyNameEnum,
     },
     query_parameters::*,
 };
@@ -70,6 +70,10 @@ pub struct Deployment {
     pub adopted_container: String,
     /// Extra container labels, `KEY=value` per line.
     pub labels: String,
+    /// Host devices, `/dev/host[:/dev/container[:rwm]]` per line.
+    pub devices: String,
+    /// Extra groups for the container's user, one per line.
+    pub group_add: String,
     pub pinned: bool,
     pub group_id: Option<i64>,
     /// Git account for the repository; None picks the one for its host.
@@ -103,6 +107,10 @@ struct Snapshot {
     command: String,
     #[serde(default)]
     labels: String,
+    #[serde(default)]
+    devices: String,
+    #[serde(default)]
+    group_add: String,
 }
 
 impl Snapshot {
@@ -116,6 +124,8 @@ impl Snapshot {
             restart: d.restart.clone(),
             command: d.command.clone(),
             labels: d.labels.clone(),
+            devices: d.devices.clone(),
+            group_add: d.group_add.clone(),
         }
     }
 
@@ -160,6 +170,10 @@ struct DeploymentInput {
     auto_deploy: bool,
     #[serde(default)]
     labels: String,
+    #[serde(default)]
+    devices: String,
+    #[serde(default)]
+    group_add: String,
     #[serde(default)]
     git_account_id: Option<i64>,
     #[serde(default)]
@@ -402,6 +416,7 @@ fn validate(input: &mut DeploymentInput) -> AppResult<()> {
     }
     parse_restart(&input.restart)?;
     parse_ports(&input.ports)?;
+    parse_devices(&input.devices)?;
     Ok(())
 }
 
@@ -449,8 +464,8 @@ async fn create(
     let d = sqlx::query_as::<_, Deployment>(
         "INSERT INTO deployments (name, image, ports, env, volumes, network, restart, command, created_at, updated_at,
            source, git_url, git_branch, build_context, dockerfile, build_args, git_token, auto_deploy, webhook_secret, labels, git_account_id,
-           upstream_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+           upstream_id, devices, group_add)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .bind(&name)
     // A promote deployment's image is whatever it last promoted.
@@ -475,6 +490,8 @@ async fn create(
     .bind(&input.labels)
     .bind(input.git_account_id)
     .bind(input.upstream_id)
+    .bind(&input.devices)
+    .bind(&input.group_add)
     .fetch_one(&state.db)
     .await?;
     Ok(Json(d))
@@ -499,7 +516,7 @@ async fn update(
            ports = ?3, env = ?4, volumes = ?5, network = ?6, restart = ?7, command = ?8, updated_at = ?9,
            source = ?1, git_url = ?10, git_branch = ?11, build_context = ?12, dockerfile = ?13, build_args = ?14,
            git_token = COALESCE(?15, git_token), auto_deploy = ?16, labels = ?18, git_account_id = ?19,
-           upstream_id = ?20
+           upstream_id = ?20, devices = ?21, group_add = ?22
          WHERE name = ?17 RETURNING *",
     )
     .bind(&input.source)
@@ -522,6 +539,8 @@ async fn update(
     .bind(&input.labels)
     .bind(input.git_account_id)
     .bind(input.upstream_id)
+    .bind(&input.devices)
+    .bind(&input.group_add)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::not_found(format!("deployment '{name}' not found")))?;
@@ -976,7 +995,7 @@ async fn roll_back(
     // stays put so the poller doesn't immediately redeploy the newer head.
     let (commit, message) = detail.split_once(' ').unwrap_or((detail, ""));
     sqlx::query(
-        "UPDATE deployments SET image = ?, ports = ?, env = ?, volumes = ?, network = ?, restart = ?, command = ?, labels = ?, updated_at = ?,
+        "UPDATE deployments SET image = ?, ports = ?, env = ?, volumes = ?, network = ?, restart = ?, command = ?, labels = ?, devices = ?, group_add = ?, updated_at = ?,
            last_commit = CASE WHEN source IN ('git', 'promote') THEN ? ELSE last_commit END,
            last_commit_message = CASE WHEN source IN ('git', 'promote') THEN ? ELSE last_commit_message END
          WHERE id = ?",
@@ -989,6 +1008,8 @@ async fn roll_back(
     .bind(&snapshot.restart)
     .bind(&snapshot.command)
     .bind(&snapshot.labels)
+    .bind(&snapshot.devices)
+    .bind(&snapshot.group_add)
     .bind(now())
     .bind(commit)
     .bind(message)
@@ -1297,6 +1318,8 @@ async fn deploy(
         .map(str::to_string)
         .collect::<Vec<_>>();
     let restart = parse_restart(&d.restart).map_err(|e| anyhow::anyhow!(e.message))?;
+    let devices = parse_devices(&d.devices).map_err(|e| anyhow::anyhow!(e.message))?;
+    let group_add = lines(&d.group_add).map(str::to_string).collect::<Vec<_>>();
 
     let body = ContainerCreateBody {
         image: Some(image.to_string()),
@@ -1312,6 +1335,8 @@ async fn deploy(
             port_bindings: (!bindings.is_empty()).then_some(bindings),
             binds: (!binds.is_empty()).then_some(binds),
             network_mode: (!d.network.is_empty()).then(|| d.network.clone()),
+            devices: (!devices.is_empty()).then_some(devices),
+            group_add: (!group_add.is_empty()).then_some(group_add),
             restart_policy: Some(RestartPolicy {
                 name: Some(restart),
                 maximum_retry_count: None,
@@ -1495,6 +1520,37 @@ fn parse_restart(s: &str) -> AppResult<RestartPolicyNameEnum> {
     })
 }
 
+/// Parses device lines like `/dev/dri`, `/dev/dri:/dev/dri` or
+/// `/dev/video0:/dev/video0:r`, as `docker run --device` takes them.
+pub(crate) fn parse_devices(s: &str) -> AppResult<Vec<DeviceMapping>> {
+    lines(s)
+        .map(|line| {
+            let parts: Vec<&str> = line.split(':').collect();
+            let (host, container, perms) = match parts.as_slice() {
+                [h] => (*h, *h, "rwm"),
+                [h, c] if c.starts_with('/') => (*h, *c, "rwm"),
+                [h, p] => (*h, *h, *p),
+                [h, c, p] => (*h, *c, *p),
+                _ => ("", "", ""),
+            };
+            let valid = host.starts_with('/')
+                && container.starts_with('/')
+                && !perms.is_empty()
+                && perms.chars().all(|c| matches!(c, 'r' | 'w' | 'm'));
+            if !valid {
+                return Err(AppError::bad_request(format!(
+                    "invalid device '{line}'; use /dev/host[:/dev/container[:rwm]]"
+                )));
+            }
+            Ok(DeviceMapping {
+                path_on_host: Some(host.to_string()),
+                path_in_container: Some(container.to_string()),
+                cgroup_permissions: Some(perms.to_string()),
+            })
+        })
+        .collect()
+}
+
 /// Parses port lines like `8080:80`, `127.0.0.1:8080:80/udp` or `80`.
 fn parse_ports(s: &str) -> AppResult<(Vec<String>, PortMap)> {
     let mut exposed = Vec::new();
@@ -1552,6 +1608,32 @@ mod tests {
         assert_eq!(b[0].host_ip.as_deref(), Some("127.0.0.1"));
         assert!(!bindings.contains_key("9000/tcp"));
         assert!(parse_ports("abc:80").is_err());
+    }
+
+    #[test]
+    fn parses_devices() {
+        let d = parse_devices("/dev/dri\n# rockchip\n/dev/rga:/dev/rga2\n/dev/video0:r").unwrap();
+        let triple = |m: &DeviceMapping| {
+            (
+                m.path_on_host.clone().unwrap(),
+                m.path_in_container.clone().unwrap(),
+                m.cgroup_permissions.clone().unwrap(),
+            )
+        };
+        assert_eq!(
+            triple(&d[0]),
+            ("/dev/dri".into(), "/dev/dri".into(), "rwm".into())
+        );
+        assert_eq!(
+            triple(&d[1]),
+            ("/dev/rga".into(), "/dev/rga2".into(), "rwm".into())
+        );
+        assert_eq!(
+            triple(&d[2]),
+            ("/dev/video0".into(), "/dev/video0".into(), "r".into())
+        );
+        assert!(parse_devices("dri").is_err());
+        assert!(parse_devices("/dev/dri:/dev/dri:x").is_err());
     }
 
     fn input(source: &str, upstream_id: Option<i64>) -> DeploymentInput {

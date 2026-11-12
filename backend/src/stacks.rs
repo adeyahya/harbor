@@ -28,7 +28,7 @@ use crate::{
     updates::{self, Update, UpdateLog},
 };
 
-#[derive(Clone, Serialize, sqlx::FromRow)]
+#[derive(Clone, Default, Serialize, sqlx::FromRow)]
 pub struct Stack {
     pub id: i64,
     pub name: String,
@@ -48,6 +48,9 @@ pub struct Stack {
     pub git_token: String,
     /// Compose file path inside the repository.
     pub compose_path: String,
+    /// Extra compose files layered on top of `compose_path` (one path per
+    /// line), like `docker compose -f base.yml -f override.yml`.
+    pub compose_overrides: String,
     pub auto_deploy: bool,
     pub webhook_secret: String,
     pub last_commit: String,
@@ -107,6 +110,8 @@ pub struct StackInput {
     #[serde(default = "default_compose_path")]
     pub compose_path: String,
     #[serde(default)]
+    pub compose_overrides: String,
+    #[serde(default)]
     pub auto_deploy: bool,
     #[serde(default)]
     pub git_account_id: Option<i64>,
@@ -125,6 +130,137 @@ pub fn router() -> Router<AppState> {
         .route("/{name}", get(detail).put(update).delete(remove))
         .route("/{name}/rollback/{update_id}", post(rollback))
         .route("/{name}/{action}", post(action))
+}
+
+#[derive(Deserialize)]
+pub struct ComposeFilesQuery {
+    git_url: String,
+    #[serde(default)]
+    git_branch: String,
+    #[serde(default)]
+    git_account_id: Option<i64>,
+}
+
+/// The compose files in a repository, so a stack can be set up from them.
+#[derive(Serialize)]
+pub struct ComposeFiles {
+    /// The resolved branch (the default branch when none was given).
+    git_branch: String,
+    /// Every compose file in the repository.
+    files: Vec<String>,
+    /// The file most likely meant to be run, e.g. `docker-compose.yml`.
+    main: Option<String>,
+    /// Files compose would layer on top of `main` by default
+    /// (`*.override.yml` next to it).
+    overrides: Vec<String>,
+}
+
+/// Lists a repository's compose files without checking it out.
+pub async fn compose_files(
+    State(state): State<AppState>,
+    Json(q): Json<ComposeFilesQuery>,
+) -> AppResult<Json<ComposeFiles>> {
+    let url = git::normalize_url(&q.git_url);
+    if url.is_empty() || url.starts_with('-') {
+        return Err(AppError::bad_request("repository URL is required"));
+    }
+    let token = crate::accounts::resolve_token(&state.db, &url, q.git_account_id, "").await;
+    let branch = git::resolve_branch(&url, &q.git_branch, &token)
+        .await
+        .map_err(AppError::bad_request)?;
+    if branch.starts_with('-') || branch.contains(char::is_whitespace) {
+        return Err(AppError::bad_request("invalid branch name"));
+    }
+    let scratch = state.data_dir.join("tmp").join(format!(
+        "compose-files-{}",
+        hex::encode(rand::random::<[u8; 8]>())
+    ));
+    let listed = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        git::list_files(&url, &branch, &token, &scratch),
+    )
+    .await;
+    let paths = match listed {
+        Ok(Ok(paths)) => paths,
+        Ok(Err(e)) => {
+            return Err(AppError::bad_request(format!(
+                "couldn't read the repository: {e:#}"
+            )));
+        }
+        Err(_) => {
+            tokio::fs::remove_dir_all(&scratch).await.ok();
+            return Err(AppError::bad_request("timed out reading the repository"));
+        }
+    };
+    let files: Vec<String> = paths
+        .into_iter()
+        .filter(|p| git::is_compose_file(p))
+        .collect();
+    let main = pick_main(&files);
+    let overrides = main
+        .as_deref()
+        .map(|m| default_overrides(m, &files))
+        .unwrap_or_default();
+    Ok(Json(ComposeFiles {
+        git_branch: branch,
+        files,
+        main,
+        overrides,
+    }))
+}
+
+/// File names compose looks for by default, in its order of preference.
+const DEFAULT_NAMES: [&str; 4] = [
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yaml",
+    "docker-compose.yml",
+];
+
+fn split_dir(path: &str) -> (&str, &str) {
+    path.rsplit_once('/').unwrap_or(("", path))
+}
+
+/// The shallowest file with one of compose's default names, else the
+/// shallowest compose file of any name.
+fn pick_main(files: &[String]) -> Option<String> {
+    let depth = |f: &String| f.matches('/').count();
+    let rank = |f: &String| {
+        let name = split_dir(f).1;
+        DEFAULT_NAMES
+            .iter()
+            .position(|n| *n == name)
+            .unwrap_or(DEFAULT_NAMES.len())
+    };
+    files
+        .iter()
+        .min_by_key(|f| (rank(f) == DEFAULT_NAMES.len(), depth(f), rank(f), f.len()))
+        .cloned()
+}
+
+/// The override files `docker compose` would load with `main` when run
+/// without `-f`: `compose.override.yaml` and the like in the same folder.
+fn default_overrides(main: &str, files: &[String]) -> Vec<String> {
+    let (dir, name) = split_dir(main);
+    let Some(stem) = name
+        .strip_suffix(".yaml")
+        .or_else(|| name.strip_suffix(".yml"))
+    else {
+        return Vec::new();
+    };
+    ["yaml", "yml"]
+        .iter()
+        .map(|ext| {
+            let file = format!("{stem}.override.{ext}");
+            if dir.is_empty() {
+                file
+            } else {
+                format!("{dir}/{file}")
+            }
+        })
+        .find(|candidate| files.contains(candidate))
+        .into_iter()
+        .collect()
 }
 
 /// Unauthenticated webhook routes, verified by signature.
@@ -251,6 +387,12 @@ async fn prepare(state: &AppState, input: &mut StackInput, stored_token: &str) -
             input.compose_path = input.compose_path.trim().to_string();
             git::validate_rel_path(&input.compose_path, "compose file path")
                 .map_err(AppError::bad_request)?;
+            let overrides: Vec<&str> = override_paths(&input.compose_overrides).collect();
+            for path in &overrides {
+                git::validate_rel_path(path, "additional compose file path")
+                    .map_err(AppError::bad_request)?;
+            }
+            input.compose_overrides = overrides.join("\n");
         }
         other => return Err(AppError::bad_request(format!("unknown source '{other}'"))),
     }
@@ -264,8 +406,8 @@ pub async fn insert(state: &AppState, mut input: StackInput) -> AppResult<Stack>
     let ts = now();
     Ok(sqlx::query_as::<_, Stack>(
         "INSERT INTO stacks (name, compose, env, created_at, updated_at, project_dir, source, git_url, git_branch,
-           git_token, compose_path, auto_deploy, webhook_secret, git_account_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+           git_token, compose_path, compose_overrides, auto_deploy, webhook_secret, git_account_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .bind(&name)
     .bind(&input.compose)
@@ -278,6 +420,7 @@ pub async fn insert(state: &AppState, mut input: StackInput) -> AppResult<Stack>
     .bind(&input.git_branch)
     .bind(input.git_token.as_deref().unwrap_or("").trim())
     .bind(&input.compose_path)
+    .bind(&input.compose_overrides)
     .bind(input.auto_deploy)
     .bind(hex::encode(rand::random::<[u8; 20]>()))
     .bind(input.git_account_id)
@@ -301,7 +444,7 @@ async fn update(
     prepare(&state, &mut input, &existing.git_token).await?;
     let stack = sqlx::query_as::<_, Stack>(
         "UPDATE stacks SET compose = ?, env = ?, updated_at = ?, project_dir = ?, source = ?, git_url = ?, git_branch = ?,
-           git_token = COALESCE(?, git_token), compose_path = ?, auto_deploy = ?, git_account_id = ?
+           git_token = COALESCE(?, git_token), compose_path = ?, compose_overrides = ?, auto_deploy = ?, git_account_id = ?
          WHERE id = ? RETURNING *",
     )
     .bind(&input.compose)
@@ -313,6 +456,7 @@ async fn update(
     .bind(&input.git_branch)
     .bind(input.git_token.as_deref().map(str::trim))
     .bind(&input.compose_path)
+    .bind(&input.compose_overrides)
     .bind(input.auto_deploy)
     .bind(input.git_account_id)
     .bind(existing.id)
@@ -386,6 +530,16 @@ impl Layout {
         } else {
             self.own_dir.join("compose.yaml")
         }
+    }
+
+    /// The main compose file followed by any override files, in the order
+    /// they are passed to compose (later files override earlier ones).
+    fn compose_files(&self, stack: &Stack) -> Vec<PathBuf> {
+        let mut files = vec![self.compose_file(stack)];
+        if stack.source == "git" {
+            files.extend(override_paths(&stack.compose_overrides).map(|p| self.checkout.join(p)));
+        }
+        files
     }
 
     /// Relative paths in the compose file resolve against this directory.
@@ -464,7 +618,21 @@ async fn run_op(
     .await
 }
 
-const UP: &[&str] = &["up", "-d", "--remove-orphans"];
+/// Paths listed in `compose_overrides`, one per line, blanks skipped.
+fn override_paths(list: &str) -> impl Iterator<Item = &str> {
+    list.lines().map(str::trim).filter(|l| !l.is_empty())
+}
+
+/// `docker compose up` arguments. Git stacks also rebuild services that have
+/// a `build:` section, so a new commit's code is what runs; services that
+/// only use `image:` are unaffected by `--build`.
+fn up_args(stack: &Stack) -> &'static [&'static str] {
+    if stack.source == "git" {
+        &["up", "-d", "--remove-orphans", "--build"]
+    } else {
+        &["up", "-d", "--remove-orphans"]
+    }
+}
 
 async fn deploy(
     state: &AppState,
@@ -492,14 +660,15 @@ async fn deploy(
             .bind(stack.id)
             .execute(&state.db)
             .await?;
-        if !layout.compose_file(stack).is_file() {
-            anyhow::bail!(
-                "no compose file at {} in the repository",
-                stack.compose_path
-            );
+        let wanted = std::iter::once(stack.compose_path.as_str())
+            .chain(override_paths(&stack.compose_overrides));
+        for (rel, file) in wanted.zip(layout.compose_files(stack)) {
+            if !file.is_file() {
+                anyhow::bail!("no compose file at {rel} in the repository");
+            }
         }
         commit = c.sha.clone();
-        compose(log, layout, stack, UP).await?;
+        compose(log, layout, stack, up_args(stack)).await?;
         sqlx::query("UPDATE stacks SET last_commit = ?, last_commit_message = ? WHERE id = ?")
             .bind(&c.sha)
             .bind(&c.message)
@@ -507,7 +676,7 @@ async fn deploy(
             .execute(&state.db)
             .await?;
     } else {
-        compose(log, layout, stack, UP).await?;
+        compose(log, layout, stack, up_args(stack)).await?;
     }
     let snapshot = Snapshot {
         compose: if stack.source == "git" {
@@ -632,7 +801,7 @@ async fn roll_back(
         .await?
     };
     write_files(layout, &restored).await?;
-    compose(log, layout, &restored, UP).await?;
+    compose(log, layout, &restored, up_args(&restored)).await?;
     log.set_artifact("", &target.snapshot).await;
     Ok(())
 }
@@ -674,9 +843,25 @@ async fn compose(
         .arg("-p")
         .arg(&stack.name)
         .arg("--project-directory")
-        .arg(&project_dir)
-        .arg("-f")
-        .arg(layout.compose_file(stack));
+        .arg(&project_dir);
+    let mut files = layout.compose_files(stack);
+    // A missing override must not stop `down`, `stop` and the like from
+    // working; deploys check every file before they get here.
+    if args.first() != Some(&"up") {
+        let mut kept = vec![files.remove(0)];
+        for file in files {
+            if file.is_file() {
+                kept.push(file);
+            } else {
+                log.line(format!("skipping missing compose file {}", file.display()))
+                    .await;
+            }
+        }
+        files = kept;
+    }
+    for file in &files {
+        cmd.arg("-f").arg(file);
+    }
     // Git stacks with no Harbor variables keep using the repository's own .env.
     if stack.source == "inline" || !stack.env.trim().is_empty() {
         cmd.arg("--env-file").arg(layout.env_file());
@@ -688,9 +873,29 @@ async fn compose(
     crate::process::run(
         log,
         cmd,
-        &format!("docker compose -p {} {}", stack.name, args.join(" ")),
+        &format!(
+            "docker compose -p {}{} {}",
+            stack.name,
+            shown_files(layout, &files),
+            args.join(" ")
+        ),
     )
     .await
+}
+
+/// The `-f` flags for the log line, relative to the checkout. Omitted for a
+/// single file, as before, to keep the common case short.
+fn shown_files(layout: &Layout, files: &[PathBuf]) -> String {
+    if files.len() < 2 {
+        return String::new();
+    }
+    files
+        .iter()
+        .map(|f| {
+            let rel = f.strip_prefix(&layout.checkout).unwrap_or(f);
+            format!(" -f {}", rel.display())
+        })
+        .collect()
 }
 
 async fn deploy_commit(state: &AppState, stack: Stack, sha: &str, by: &str) -> AppResult<Update> {
@@ -778,4 +983,82 @@ async fn poll_one(state: &AppState, stack: Stack) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!(e.message))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn files(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn layers_override_files_after_the_main_one() {
+        let layout = Layout {
+            own_dir: PathBuf::from("/data/stacks/app"),
+            checkout: PathBuf::from("/data/stacks/app/repo"),
+        };
+        let stack = Stack {
+            source: "git".into(),
+            compose_path: "docker-compose.yml".into(),
+            compose_overrides: " docker-compose.rockchip.yml \n\n gpu/compose.yml\n".into(),
+            ..Default::default()
+        };
+        let got = layout.compose_files(&stack);
+        assert_eq!(
+            got,
+            [
+                "/data/stacks/app/repo/docker-compose.yml",
+                "/data/stacks/app/repo/docker-compose.rockchip.yml",
+                "/data/stacks/app/repo/gpu/compose.yml",
+            ]
+            .map(PathBuf::from)
+        );
+        assert_eq!(
+            shown_files(&layout, &got),
+            " -f docker-compose.yml -f docker-compose.rockchip.yml -f gpu/compose.yml"
+        );
+        assert_eq!(up_args(&stack), ["up", "-d", "--remove-orphans", "--build"]);
+
+        // Inline stacks have one file and keep their previous `up`.
+        let inline = Stack {
+            source: "inline".into(),
+            compose_overrides: "ignored.yml".into(),
+            ..stack
+        };
+        assert_eq!(layout.compose_files(&inline).len(), 1);
+        assert_eq!(shown_files(&layout, &layout.compose_files(&inline)), "");
+        assert_eq!(up_args(&inline), ["up", "-d", "--remove-orphans"]);
+    }
+
+    #[test]
+    fn picks_the_main_compose_file() {
+        let repo = files(&[
+            "docker-compose.rockchip.yml",
+            "examples/compose.yaml",
+            "docker-compose.yml",
+            "docker-compose.override.yml",
+        ]);
+        assert_eq!(pick_main(&repo).as_deref(), Some("docker-compose.yml"));
+        assert_eq!(
+            default_overrides("docker-compose.yml", &repo),
+            ["docker-compose.override.yml"]
+        );
+
+        // compose.yaml is preferred over docker-compose.yml, like compose does.
+        let both = files(&["docker-compose.yml", "compose.yaml"]);
+        assert_eq!(pick_main(&both).as_deref(), Some("compose.yaml"));
+
+        // A default name deeper down beats an unusual name at the root.
+        let nested = files(&["compose.dev.yml", "deploy/compose.yaml"]);
+        assert_eq!(pick_main(&nested).as_deref(), Some("deploy/compose.yaml"));
+        assert!(default_overrides("deploy/compose.yaml", &nested).is_empty());
+
+        assert_eq!(
+            pick_main(&files(&["compose.prod.yml"])).as_deref(),
+            Some("compose.prod.yml")
+        );
+        assert_eq!(pick_main(&[]), None);
+    }
 }

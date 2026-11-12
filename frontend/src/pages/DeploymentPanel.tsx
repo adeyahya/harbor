@@ -42,6 +42,8 @@ const FIELDS = [
   'build_args',
   'auto_deploy',
   'labels',
+  'devices',
+  'group_add',
   'git_account_id',
   'upstream_id',
 ] as const satisfies readonly (keyof Deployment)[]
@@ -315,6 +317,30 @@ function DeploymentPanelInner({ name }: { name: string }) {
           </SettingsSection>
           <SettingsSection title="Volumes" description="Mount host paths or named volumes into the container.">
             <Textarea value={config.volumes} onChange={(e) => set('volumes')(e.target.value)} rows={3} placeholder={'app-data:/data\n/srv/config:/config:ro'} className="font-mono text-[12.5px]" />
+          </SettingsSection>
+          <SettingsSection title="Devices" description="Host devices for the container, e.g. /dev/dri for hardware acceleration. Applied on the next deploy.">
+            <div className="space-y-4">
+              <Field label="Devices" hint="One per line: /dev/host, /dev/host:/dev/container, or with permissions like :rw." htmlFor="dep-devices">
+                <Textarea
+                  id="dep-devices"
+                  value={config.devices}
+                  onChange={(e) => set('devices')(e.target.value)}
+                  rows={3}
+                  placeholder={'/dev/dri\n/dev/rga'}
+                  className="font-mono text-[12.5px]"
+                />
+              </Field>
+              <Field label="Extra groups" hint="Groups the container's user joins to use the devices, one per line (names or ids)." htmlFor="dep-groups">
+                <Textarea
+                  id="dep-groups"
+                  value={config.group_add}
+                  onChange={(e) => set('group_add')(e.target.value)}
+                  rows={2}
+                  placeholder={'video\nrender'}
+                  className="font-mono text-[12.5px] sm:w-72"
+                />
+              </Field>
+            </div>
           </SettingsSection>
           <SettingsSection title="Deploy" description="How the container runs.">
             <div className="grid gap-4 sm:grid-cols-2">

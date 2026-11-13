@@ -15,7 +15,7 @@ use bollard::{
     query_parameters::*,
 };
 use futures_util::{Stream, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
@@ -39,6 +39,7 @@ pub fn router() -> Router<AppState> {
         .route("/image-ports", get(image_ports))
         .route("/images/{id}", delete(remove_image))
         .route("/volumes", get(list_volumes))
+        .route("/volume-usage", get(volume_usage))
         .route(
             "/volumes/{name}",
             get(crate::volume_browser::detail).delete(remove_volume),
@@ -309,6 +310,72 @@ async fn list_volumes(State(state): State<AppState>) -> AppResult<Json<Vec<Volum
     Ok(Json(volumes))
 }
 
+/// One volume's disk usage, from Docker's `system df`.
+#[derive(Debug, PartialEq, Serialize)]
+struct VolumeUsage {
+    name: String,
+    /// Bytes on disk, or `None` when the driver can't report it.
+    size: Option<i64>,
+    /// Containers referencing the volume, running or not.
+    ref_count: i64,
+}
+
+#[derive(Debug, PartialEq, Serialize)]
+struct VolumeUsageReport {
+    total_size: i64,
+    /// Bytes held by volumes no container references.
+    reclaimable: i64,
+    volumes: Vec<VolumeUsage>,
+}
+
+/// Scans every volume's size. Docker walks each volume's files to answer, so
+/// this runs on demand rather than with the volume list.
+async fn volume_usage(State(state): State<AppState>) -> AppResult<Json<VolumeUsageReport>> {
+    let df = state
+        .docker
+        // No `type=volume` filter: bollard can't URL-encode the list it takes.
+        .df(Some(DataUsageOptions {
+            verbose: true,
+            ..Default::default()
+        }))
+        .await?;
+    Ok(Json(usage_report(df.volume_usage.unwrap_or_default())))
+}
+
+fn usage_report(usage: bollard::models::VolumesDiskUsage) -> VolumeUsageReport {
+    #[derive(Deserialize)]
+    struct Item {
+        #[serde(rename = "Name")]
+        name: String,
+        #[serde(rename = "UsageData")]
+        usage: Option<bollard::models::VolumeUsageData>,
+    }
+    let mut volumes: Vec<VolumeUsage> = usage
+        .items
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<Item>(v).ok())
+        .map(|v| VolumeUsage {
+            name: v.name,
+            // Docker reports -1 when the size isn't known (e.g. remote drivers).
+            size: v.usage.as_ref().map(|u| u.size).filter(|s| *s >= 0),
+            ref_count: v.usage.map_or(0, |u| u.ref_count),
+        })
+        .collect();
+    volumes.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+    let total_size = volumes.iter().filter_map(|v| v.size).sum();
+    let reclaimable = volumes
+        .iter()
+        .filter(|v| v.ref_count == 0)
+        .filter_map(|v| v.size)
+        .sum();
+    VolumeUsageReport {
+        total_size,
+        reclaimable,
+        volumes,
+    }
+}
+
 async fn remove_volume(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -405,4 +472,29 @@ async fn prune(
     )
     .await?;
     Ok(Json(update))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_report_sorts_by_size_and_counts_unused_volumes() {
+        let usage = bollard::models::VolumesDiskUsage {
+            items: Some(vec![
+                json!({"Name": "small", "UsageData": {"Size": 10, "RefCount": 1}}),
+                json!({"Name": "remote", "UsageData": {"Size": -1, "RefCount": 0}}),
+                json!({"Name": "big-unused", "UsageData": {"Size": 500, "RefCount": 0}}),
+                json!({"Name": "no-data"}),
+            ]),
+            ..Default::default()
+        };
+        let report = usage_report(usage);
+        let names: Vec<_> = report.volumes.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["big-unused", "small", "no-data", "remote"]);
+        assert_eq!(report.volumes[2].size, None);
+        assert_eq!(report.volumes[3].size, None);
+        assert_eq!(report.total_size, 510);
+        assert_eq!(report.reclaimable, 500);
+    }
 }

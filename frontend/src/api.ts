@@ -150,6 +150,15 @@ export interface Volume {
   Labels: Record<string, string> | null
 }
 
+/** Result of an on-demand volume disk usage scan (`GET /docker/volume-usage`). */
+export interface VolumeUsageReport {
+  total_size: number
+  /** Bytes held by volumes no container references. */
+  reclaimable: number
+  /** Sorted largest first. */
+  volumes: { name: string; size: number | null; ref_count: number }[]
+}
+
 export interface Network {
   Id: string
   Name: string

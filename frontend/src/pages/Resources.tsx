@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Boxes, HardDrive, Network as NetworkIcon, Search, Trash2 } from 'lucide-react'
+import { Boxes, Gauge, HardDrive, Network as NetworkIcon, Search, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Outlet, useNavigate } from 'react-router'
-import { api, type ImageSummary, type Network, type Volume } from '@/api'
+import { api, type ImageSummary, type Network, type Volume, type VolumeUsageReport } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { EmptyState, ErrorAlert, Loading, Page, PageHeader, Surface } from '@/components/app/page'
 import { Status } from '@/components/app/status'
@@ -35,6 +35,9 @@ function ResourcePage<T>(props: {
   /** Opens a detail panel (rendered through the route's Outlet). */
   linkOf?: (item: T) => string
   empty: string
+  /** Extra header actions, shown before "Prune unused". */
+  actions?: ReactNode
+  sort?: (a: T, b: T) => number
 }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -51,6 +54,7 @@ function ResourcePage<T>(props: {
   const [search, setSearch] = useState('')
   const [pending, setPending] = useState<T | null>(null)
   const items = (data ?? []).filter((i) => props.search(i).toLowerCase().includes(search.toLowerCase()))
+  if (props.sort) items.sort(props.sort)
 
   return (
     <Page>
@@ -58,9 +62,12 @@ function ResourcePage<T>(props: {
         title={props.title}
         description={data && props.description?.(data)}
         actions={
-          <Confirm title={props.prune.title} description={props.prune.description} confirmLabel="Prune" onConfirm={() => run.mutate({ path: `/docker/prune/${props.prune.kind}` })}>
-            <Button variant="secondary" size="sm" label="Prune unused" />
-          </Confirm>
+          <>
+            {props.actions}
+            <Confirm title={props.prune.title} description={props.prune.description} confirmLabel="Prune" onConfirm={() => run.mutate({ path: `/docker/prune/${props.prune.kind}` })}>
+              <Button variant="secondary" size="sm" label="Prune unused" />
+            </Confirm>
+          </>
         }
       />
       <ErrorAlert error={error} className="mb-4" />
@@ -162,11 +169,38 @@ export function ImagesPage() {
 }
 
 export function VolumesPage() {
+  // Docker walks every volume's files to size them, so the scan only runs when asked.
+  const usage = useQuery({
+    queryKey: ['volume-usage'],
+    queryFn: () => api.get<VolumeUsageReport>('/docker/volume-usage'),
+    enabled: false,
+    staleTime: Infinity,
+  })
+  const sizes = new Map(usage.data?.volumes.map((v) => [v.name, v]))
+  const largest = Math.max(1, ...(usage.data?.volumes.map((v) => v.size ?? 0) ?? []))
+  const sizeOf = (v: Volume) => sizes.get(v.Name)?.size ?? -1
+
   return (
     <ResourcePage<Volume>
       title="Volumes"
       icon={<HardDrive />}
-      description={(items) => `${items.length} volumes · click one to browse its files`}
+      description={(items) =>
+        usage.data
+          ? `${items.length} volumes · ${bytes(usage.data.total_size)} on disk · ${bytes(usage.data.reclaimable)} in unused volumes`
+          : `${items.length} volumes · click one to browse its files`
+      }
+      actions={
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={<Gauge />}
+          label={usage.data ? 'Rescan disk usage' : 'Scout disk usage'}
+          tooltip="Measure how much disk each volume uses"
+          isLoading={usage.isFetching}
+          onClick={() => usage.refetch().then((r) => r.error && toast.error(r.error.message))}
+        />
+      }
+      sort={usage.data ? (a, b) => sizeOf(b) - sizeOf(a) : undefined}
       queryKey="volumes"
       path="/docker/volumes"
       prune={{ kind: 'volumes', title: 'Prune unused volumes?', description: 'Every volume not attached to a container is deleted along with its data.' }}
@@ -177,11 +211,29 @@ export function VolumesPage() {
       empty="No volumes"
       columns={[
         { head: 'Name', cell: (v) => <span className={`${mono} block max-w-md truncate`} title={v.Mountpoint}>{v.Name}</span> },
+        ...(usage.data ? [{ head: 'Size', cell: (v: Volume) => <UsageCell usage={sizes.get(v.Name)} largest={largest} />, className: 'w-56 min-w-44' }] : []),
         { head: 'Driver', cell: (v) => v.Driver, className: 'hidden sm:table-cell' },
         { head: 'Stack', cell: (v) => v.Labels?.['com.docker.compose.project'] ?? <span className="text-muted-foreground/60">—</span> },
         { head: 'Created', cell: (v) => <span className="text-muted-foreground">{v.CreatedAt ? timeAgo(v.CreatedAt) : '—'}</span>, className: 'hidden sm:table-cell' },
       ]}
     />
+  )
+}
+
+/** A volume's size with a bar scaled to the largest volume; unused volumes are flagged. */
+function UsageCell({ usage, largest }: { usage?: VolumeUsageReport['volumes'][number]; largest: number }) {
+  // Missing: created after the scan. Null size: the driver can't report one.
+  if (!usage || usage.size === null) return <span className="text-muted-foreground/60">—</span>
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="tabular-nums">
+        {bytes(usage.size)}
+        {usage.ref_count === 0 && <span className="ml-2 text-xs text-muted-foreground">unused</span>}
+      </span>
+      <div className="h-1 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
+        <div className={`h-full rounded-full ${usage.ref_count === 0 ? 'bg-warning' : 'bg-brand'}`} style={{ width: usage.size > 0 ? `${Math.max(2, (usage.size / largest) * 100)}%` : 0 }} />
+      </div>
+    </div>
   )
 }
 

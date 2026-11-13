@@ -1,9 +1,10 @@
 import { Eye, EyeOff, FileCode2, Plus, Rows3, Trash2 } from 'lucide-react'
-import { useRef, useState, type ReactNode } from 'react'
+import { Button } from '@astryxdesign/core/Button'
+import { Drawer, DrawerHeader } from '@astryxdesign/core/Drawer'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Tab, TabList } from '@astryxdesign/core/TabList'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 
 /**
@@ -27,7 +28,7 @@ export function ServicePanel({
   title: string
   subtitle: ReactNode
   actions?: ReactNode
-  tabs: { id: string; label: ReactNode }[]
+  tabs: { id: string; label: string }[]
   tab: string
   onTabChange: (t: string) => void
   footer?: ReactNode
@@ -35,46 +36,58 @@ export function ServicePanel({
   closeTo?: string
 }) {
   const navigate = useNavigate()
+  const close = () => navigate(closeTo)
+  const closeRef = useRef(close)
+  useEffect(() => {
+    closeRef.current = close
+  })
+
+  // The drawer is non-modal, so dismissal on outside clicks is ours. Only a
+  // click on the page behind closes the panel. Clicks on other service cards
+  // switch it instead, and top-layer UI (this drawer, other dialogs, menus,
+  // the command menu, toasts, the action tray) must not dismiss it. Astryx
+  // overlays stay in the DOM where they're rendered, so exclude them by element.
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Element | null
+      if (!target?.closest?.('main') || target.closest('[data-service-card], dialog, [popover]')) return
+      closeRef.current()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [])
+
   return (
-    <Sheet open modal={false} onOpenChange={(o) => !o && navigate(closeTo)}>
-      <SheetContent
-        side="right"
-        className="gap-0 border-l bg-background p-0 shadow-2xl shadow-black/40 data-[side=right]:w-full data-[side=right]:sm:max-w-[min(54rem,calc(100vw-3rem))] data-[side=right]:lg:top-14 data-[side=right]:lg:h-[calc(100%-3.5rem)]"
-        onInteractOutside={(e) => {
-          // Only a click on the page behind closes the panel. Clicks on other
-          // service cards switch it instead, and portaled UI (command menu,
-          // toasts, the action tray) must not dismiss it.
-          const target = e.target as Element | null
-          if (!target?.closest?.('main') || target.closest('[data-service-card]')) e.preventDefault()
-        }}
-        onFocusOutside={(e) => e.preventDefault()}
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
-        <div className="flex items-start gap-3 px-5 pt-5 pr-14 pb-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-card text-brand [&_svg]:size-5">{icon}</div>
-          <div className="min-w-0 flex-1">
-            <SheetTitle className="truncate text-lg font-semibold">{title}</SheetTitle>
-            <SheetDescription asChild>
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">{subtitle}</div>
-            </SheetDescription>
-          </div>
-          {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
-        </div>
+    <Drawer
+      isOpen
+      onOpenChange={(o) => !o && close()}
+      label={title}
+      hasScrim={false}
+      padding={0}
+      width="min(54rem, calc(100vw - 3rem))"
+      experimental={{ isFullWidthOnMobile: true }}
+      className="bg-background shadow-2xl shadow-black/40 lg:top-14 lg:h-[calc(100%-3.5rem)]"
+    >
+      <div className="flex h-full flex-col">
+        <DrawerHeader
+          className="px-5 pt-5 pb-3"
+          startContent={<div className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-card text-brand [&_svg]:size-5">{icon}</div>}
+          title={<span className="block truncate text-lg font-semibold">{title}</span>}
+          subtitle={<div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">{subtitle}</div>}
+          endContent={actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+          onOpenChange={(o) => !o && close()}
+        />
         <div className="scrollbar-thin overflow-x-auto border-b px-3">
-          <Tabs value={tab} onValueChange={onTabChange}>
-            <TabsList variant="line" className="h-10 gap-0">
-              {tabs.map((t) => (
-                <TabsTrigger key={t.id} value={t.id} className="px-3">
-                  {t.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+          <TabList value={tab} onChange={onTabChange} aria-label={`${title} sections`}>
+            {tabs.map((t) => (
+              <Tab key={t.id} value={t.id} label={t.label} />
+            ))}
+          </TabList>
         </div>
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5">{children}</div>
         {footer}
-      </SheetContent>
-    </Sheet>
+      </div>
+    </Drawer>
   )
 }
 
@@ -98,21 +111,15 @@ export function usePanelTab<T extends string>(tabs: readonly T[], fallback: T): 
 export function ChangesBar({ count, onDiscard, onSave, onDeploy, saving }: { count: number; onDiscard: () => void; onSave: () => void; onDeploy: () => void; saving: boolean }) {
   if (count === 0) return null
   return (
-    <div className="flex items-center gap-2 border-t bg-card px-5 py-3 animate-in slide-in-from-bottom-2 fade-in">
+    <div className="flex items-center gap-2 border-t bg-card px-5 py-3 animate-rise-in">
       <span className="size-2 rounded-full bg-brand" />
       <span className="text-sm">
         {count} unsaved change{count === 1 ? '' : 's'}
       </span>
       <div className="ml-auto flex gap-2">
-        <Button variant="ghost" size="sm" onClick={onDiscard}>
-          Discard
-        </Button>
-        <Button variant="outline" size="sm" onClick={onSave} disabled={saving}>
-          Save
-        </Button>
-        <Button size="sm" onClick={onDeploy} disabled={saving}>
-          Save & deploy
-        </Button>
+        <Button variant="ghost" size="sm" label="Discard" onClick={onDiscard} />
+        <Button variant="secondary" size="sm" label="Save" onClick={onSave} isDisabled={saving} />
+        <Button variant="primary" size="sm" label="Save & deploy" onClick={onDeploy} isLoading={saving} />
       </div>
     </div>
   )
@@ -243,14 +250,8 @@ export function VariablesEditor({
           )}
         </p>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setRaw((r) => !r)}>
-            {raw ? <Rows3 /> : <FileCode2 />} {raw ? 'Table view' : 'Raw editor'}
-          </Button>
-          {!raw && (
-            <Button size="sm" onClick={add}>
-              <Plus /> New {noun}
-            </Button>
-          )}
+          <Button variant="secondary" size="sm" icon={raw ? <Rows3 /> : <FileCode2 />} label={raw ? 'Table view' : 'Raw editor'} onClick={() => setRaw((r) => !r)} />
+          {!raw && <Button variant="primary" size="sm" icon={<Plus />} label={`New ${noun}`} onClick={add} />}
         </div>
       </div>
       {raw ? (
@@ -259,9 +260,7 @@ export function VariablesEditor({
         <div className="rounded-xl border border-dashed px-6 py-10 text-center">
           <p className="text-sm font-medium">No {noun}s</p>
           {secret && <p className="mt-1 text-sm text-muted-foreground">Add environment variables to configure this service.</p>}
-          <Button variant="outline" size="sm" className="mt-4" onClick={add}>
-            <Plus /> Add {noun}
-          </Button>
+          <Button variant="secondary" size="sm" className="mt-4" icon={<Plus />} label={`Add ${noun}`} onClick={add} />
         </div>
       ) : (
         <div className="divide-y overflow-hidden rounded-xl border bg-card">
@@ -282,13 +281,9 @@ export function VariablesEditor({
                 className="h-8 min-w-0 flex-1 rounded-md bg-transparent px-2 font-mono text-[12.5px] text-muted-foreground outline-none placeholder:text-muted-foreground/60 hover:bg-accent/50 focus:bg-accent/60 focus:text-foreground"
               />
               {secret && (
-                <Button variant="ghost" size="icon-sm" onClick={() => toggle(i)} title={revealed.has(i) ? 'Hide value' : 'Show value'}>
-                  {revealed.has(i) ? <EyeOff /> : <Eye />}
-                </Button>
+                <IconButton variant="ghost" size="sm" label={revealed.has(i) ? 'Hide value' : 'Show value'} tooltip={revealed.has(i) ? 'Hide value' : 'Show value'} icon={revealed.has(i) ? <EyeOff /> : <Eye />} onClick={() => toggle(i)} />
               )}
-              <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => remove(i)} title={`Remove ${noun}`}>
-                <Trash2 />
-              </Button>
+              <IconButton variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" label={`Remove ${noun}`} tooltip={`Remove ${noun}`} icon={<Trash2 />} onClick={() => remove(i)} />
             </div>
           ))}
         </div>

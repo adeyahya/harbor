@@ -1,7 +1,8 @@
 import { ArrowDown, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '@astryxdesign/core/Button'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Selector } from '@astryxdesign/core/Selector'
 import { cn } from '@/lib/utils'
 
 interface Line {
@@ -75,30 +76,23 @@ export function LogViewer({ containerId, className }: { containerId: string; cla
             className="h-8 w-full rounded-lg border bg-background pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/30"
           />
         </div>
-        <Select value={tail} onValueChange={setTail}>
-          <SelectTrigger size="sm" className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {['100', '500', '1000', '5000', 'all'].map((t) => (
-              <SelectItem key={t} value={t}>
-                {t === 'all' ? 'All lines' : `Last ${t}`}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Selector
+          label="Lines"
+          isLabelHidden
+          size="sm"
+          width={128}
+          value={tail}
+          onChange={setTail}
+          options={['100', '500', '1000', '5000', 'all'].map((t) => ({ value: t, label: t === 'all' ? 'All lines' : `Last ${t}` }))}
+        />
         <span className={cn('flex items-center gap-1.5 px-1 text-xs', connected ? 'text-success' : 'text-muted-foreground')}>
           <span className={cn('size-1.5 rounded-full', connected ? 'animate-pulse bg-success' : 'bg-muted-foreground/60')} />
           {connected ? 'Live' : 'Disconnected'}
         </span>
         {!connected && (
-          <Button size="sm" variant="ghost" onClick={() => setSession((n) => n + 1)}>
-            <RefreshCw /> Reconnect
-          </Button>
+          <Button size="sm" variant="ghost" label="Reconnect" icon={<RefreshCw />} onClick={() => setSession((n) => n + 1)} />
         )}
-        <Button size="icon-sm" variant="ghost" title="Clear" onClick={() => setLines([])}>
-          <Trash2 />
-        </Button>
+        <IconButton size="sm" variant="ghost" label="Clear" tooltip="Clear" icon={<Trash2 />} onClick={() => setLines([])} />
       </div>
 
       <div
@@ -125,14 +119,15 @@ export function LogViewer({ containerId, className }: { containerId: string; cla
         <Button
           size="sm"
           variant="secondary"
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-lg"
+          elevation="med"
+          label="Jump to latest"
+          icon={<ArrowDown />}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2"
           onClick={() => {
             setFollow(true)
             if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
           }}
-        >
-          <ArrowDown /> Jump to latest
-        </Button>
+        />
       )}
     </div>
   )

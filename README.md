@@ -132,7 +132,7 @@ flowchart TB
 | --- | --- |
 | HTTP API, sessions, background deploys | `backend/src` (axum, tokio) |
 | Schema | `backend/migrations` (applied on startup) |
-| UI | `frontend/src` (React, Vite, shadcn/ui) |
+| UI | `frontend/src` (React, Vite, [Astryx](https://astryx.atmeta.com), Tailwind) |
 | Image | [`Dockerfile`](Dockerfile) multi-stage build, [`compose.yaml`](compose.yaml) |
 | CI | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (Rust and frontend), [`.github/workflows/docker.yml`](.github/workflows/docker.yml) (image, push to GHCR on tags) |
 
@@ -468,7 +468,6 @@ backend/
 frontend/
   src/
     api.ts         API client and types
-    components/ui/ shadcn/ui primitives (generated; edit sparingly)
     components/app/ app components: layout, service panel, log viewer,
                    variables editor, command menu, action tray
     pages/         canvas, service panels, Docker resource pages

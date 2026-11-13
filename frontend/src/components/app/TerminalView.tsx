@@ -5,8 +5,9 @@ import { RefreshCw, SquareTerminal } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useEffect, useRef, useState } from 'react'
 import { EmptyState } from '@/components/app/page'
-import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '@astryxdesign/core/Button'
+import { Selector } from '@astryxdesign/core/Selector'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { cn } from '@/lib/utils'
 
 const SHELLS = [
@@ -119,41 +120,27 @@ export default function TerminalView({ containerId, running, className }: { cont
   return (
     <div className={cn('flex flex-col overflow-hidden rounded-xl border bg-log', className)}>
       <div className="flex flex-wrap items-center gap-2 border-b bg-card px-2.5 py-2">
-        <Select value={shell} onValueChange={setShell}>
-          <SelectTrigger size="sm" className="w-44" aria-label="Shell">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {SHELLS.map((s) => (
-              <SelectItem key={s.value} value={s.value}>
-                {s.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            setUser(userDraft.trim())
-          }}
-        >
-          <input
-            value={userDraft}
-            onChange={(e) => setUserDraft(e.target.value)}
-            onBlur={() => setUser(userDraft.trim())}
-            placeholder="User (default)"
-            aria-label="Run as user"
-            className="h-8 w-36 rounded-lg border bg-background px-2.5 font-mono text-xs outline-none placeholder:font-sans placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/30"
-          />
-        </form>
+        <Selector label="Shell" isLabelHidden size="sm" width={176} options={SHELLS} value={shell} onChange={setShell} />
+        <TextInput
+          label="Run as user"
+          isLabelHidden
+          size="sm"
+          width={144}
+          value={userDraft}
+          onChange={setUserDraft}
+          onEnter={() => setUser(userDraft.trim())}
+          onBlur={() => setUser(userDraft.trim())}
+          placeholder="User (default)"
+          hasAutoCorrect={false}
+          autoCapitalize="off"
+          controlClassName="font-mono"
+        />
         <span className={cn('ml-auto flex items-center gap-1.5 px-1 text-xs', status.kind === 'open' ? 'text-success' : 'text-muted-foreground')}>
           <span className={cn('size-1.5 rounded-full', status.kind === 'open' ? 'animate-pulse bg-success' : 'bg-muted-foreground/60')} />
           {status.kind === 'open' ? 'Connected' : status.kind === 'connecting' ? 'Connecting…' : 'Closed'}
         </span>
         {status.kind === 'closed' && (
-          <Button size="sm" variant="ghost" onClick={() => setSession((n) => n + 1)}>
-            <RefreshCw /> New session
-          </Button>
+          <Button size="sm" variant="ghost" icon={<RefreshCw />} label="New session" onClick={() => setSession((n) => n + 1)} />
         )}
       </div>
       <div className="min-h-0 flex-1 p-2">

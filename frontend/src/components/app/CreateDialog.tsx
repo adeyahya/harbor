@@ -3,13 +3,13 @@ import { AlertTriangle, ArrowLeft, Box, Layers, Loader2, PackageOpen, RefreshCw 
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { api } from '@/api'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
+import { Button } from '@astryxdesign/core/Button'
+import { CheckboxInput } from '@astryxdesign/core/CheckboxInput'
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Selector } from '@astryxdesign/core/Selector'
+import { Switch } from '@astryxdesign/core/Switch'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { cn } from '@/lib/utils'
 import { GithubIcon } from './GithubIcon'
 import { ErrorAlert } from './page'
@@ -38,16 +38,18 @@ export function CreateProvider({ children }: { children: ReactNode }) {
   return (
     <CreateContext.Provider value={openWith}>
       {children}
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md">
-          {kind ? <CreateForm kind={kind} onBack={() => setKind(null)} onDone={() => setOpen(false)} /> : <KindPicker onPick={setKind} onImport={() => setOpen(false)} />}
-        </DialogContent>
+      <Dialog isOpen={open} onOpenChange={setOpen} width={448} padding={0} purpose="form">
+        {kind ? (
+          <CreateForm kind={kind} onBack={() => setKind(null)} onDone={() => setOpen(false)} onOpenChange={setOpen} />
+        ) : (
+          <KindPicker onPick={setKind} onImport={() => setOpen(false)} onOpenChange={setOpen} />
+        )}
       </Dialog>
     </CreateContext.Provider>
   )
 }
 
-function KindPicker({ onPick, onImport }: { onPick: (k: Kind) => void; onImport: () => void }) {
+function KindPicker({ onPick, onImport, onOpenChange }: { onPick: (k: Kind) => void; onImport: () => void; onOpenChange: (open: boolean) => void }) {
   const navigate = useNavigate()
   const options = [
     { kind: 'repo' as const, icon: <GithubIcon className="size-4.5" />, title: 'GitHub repo', body: 'Build a Dockerfile from a repository and redeploy on push.' },
@@ -56,10 +58,13 @@ function KindPicker({ onPick, onImport }: { onPick: (k: Kind) => void; onImport:
   ]
   return (
     <>
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle>What would you like to create?</DialogTitle>
-        <DialogDescription>Services run on this server's Docker engine.</DialogDescription>
-      </DialogHeader>
+      <DialogHeader
+        className="px-5 py-4"
+        title="What would you like to create?"
+        subtitle="Services run on this server's Docker engine."
+        onOpenChange={onOpenChange}
+        hasDivider
+      />
       <div className="space-y-1 p-2">
         {options.map((o) => (
           <button key={o.kind} onClick={() => onPick(o.kind)} className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-accent">
@@ -177,7 +182,17 @@ function nameFromRepo(repo: string) {
   return last.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^[-_]+/, '').slice(0, 63)
 }
 
-function CreateForm({ kind, onBack, onDone }: { kind: Kind; onBack: () => void; onDone: () => void }) {
+function CreateForm({
+  kind,
+  onBack,
+  onDone,
+  onOpenChange,
+}: {
+  kind: Kind
+  onBack: () => void
+  onDone: () => void
+  onOpenChange: (open: boolean) => void
+}) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [name, setName] = useState('')
@@ -225,6 +240,10 @@ function CreateForm({ kind, onBack, onDone }: { kind: Kind; onBack: () => void; 
   const service =
     services.find((s) => s.service === (serviceChoice?.key === scanKey ? serviceChoice.service : defaultService(services))) ?? null
 
+  const nameValid = /^[a-z0-9][a-z0-9_-]*$/.test(name)
+  // Stand-ins for the native `required`/`pattern` checks the old inputs had.
+  const missing = !nameValid || (kind === 'repo' && !repo.trim()) || (kind === 'image' && !image.trim())
+
   const path = kind === 'stack' ? 'stacks' : 'deployments'
   const create = useMutation({
     mutationFn: async () => {
@@ -254,86 +273,80 @@ function CreateForm({ kind, onBack, onDone }: { kind: Kind; onBack: () => void; 
       onSubmit={(e) => {
         e.preventDefault()
         if (stale) rescan()
-        else create.mutate()
+        else if (!missing) create.mutate()
       }}
     >
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle className="flex items-center gap-2">
-          <button type="button" onClick={onBack} className="-ml-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Back">
-            <ArrowLeft className="size-4" />
-          </button>
-          {titles[kind]}
-        </DialogTitle>
-        <DialogDescription>{descriptions[kind]}</DialogDescription>
-      </DialogHeader>
+      <DialogHeader
+        className="px-5 py-4"
+        title={titles[kind]}
+        subtitle={descriptions[kind]}
+        startContent={<IconButton label="Back" icon={<ArrowLeft />} variant="ghost" size="sm" onClick={onBack} />}
+        onOpenChange={onOpenChange}
+        hasDivider
+      />
       <div className="max-h-[calc(100dvh-12rem)] space-y-4 overflow-y-auto px-5 py-4">
         {kind === 'repo' && (
           <>
-            <div className="space-y-2">
-              <Label htmlFor="create-repo">Repository</Label>
-              <Input
-                id="create-repo"
-                value={repo}
-                onChange={(e) => {
-                  setRepo(e.target.value)
-                  if (!nameTouched) setName(nameFromRepo(e.target.value))
-                }}
-                onBlur={() => fromCompose && rescan()}
-                placeholder="owner/repo or https://…"
-                className="font-mono"
-                autoFocus
-                required
-              />
-              <p className="text-xs text-muted-foreground">Private repositories use your git accounts from Settings.</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="create-branch">Branch</Label>
-              <Input
-                id="create-branch"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-                onBlur={() => fromCompose && rescan()}
-                placeholder="Default branch"
-                className="font-mono"
-              />
-              <p className="text-xs text-muted-foreground">Leave empty to use the repository's default branch.</p>
-            </div>
+            <TextInput
+              label="Repository"
+              value={repo}
+              onChange={(v) => {
+                setRepo(v)
+                if (!nameTouched) setName(nameFromRepo(v))
+              }}
+              onBlur={() => fromCompose && rescan()}
+              placeholder="owner/repo or https://…"
+              description="Private repositories use your git accounts from Settings."
+              controlClassName="font-mono"
+              hasAutoFocus
+              isRequired
+              width="100%"
+            />
+            <TextInput
+              label="Branch"
+              value={branch}
+              onChange={setBranch}
+              onBlur={() => fromCompose && rescan()}
+              placeholder="Default branch"
+              description="Leave empty to use the repository's default branch."
+              controlClassName="font-mono"
+              width="100%"
+            />
           </>
         )}
-        <div className="space-y-2">
-          <Label htmlFor="create-name">Service name</Label>
-          <Input
-            id="create-name"
-            value={name}
-            onChange={(e) => {
-              setNameTouched(true)
-              setName(e.target.value.toLowerCase())
-            }}
-            onBlur={() => setSettingsName(name)}
-            placeholder={kind === 'stack' ? 'my-app' : 'my-service'}
-            autoFocus={kind !== 'repo'}
-            required
-            pattern="[a-z0-9][a-z0-9_\-]*"
-          />
-          <p className="text-xs text-muted-foreground">Lowercase letters, digits, - and _.</p>
-        </div>
+        <TextInput
+          label="Service name"
+          value={name}
+          onChange={(v) => {
+            setNameTouched(true)
+            setName(v.toLowerCase())
+          }}
+          onBlur={() => setSettingsName(name)}
+          placeholder={kind === 'stack' ? 'my-app' : 'my-service'}
+          description="Lowercase letters, digits, - and _."
+          status={name && !nameValid ? { type: 'error', message: 'Start with a letter or digit; use only a-z, 0-9, - and _.' } : undefined}
+          hasAutoFocus={kind !== 'repo'}
+          isRequired
+          width="100%"
+        />
         {kind === 'repo' && (
-          <label className="flex cursor-pointer items-start justify-between gap-3 rounded-lg border px-3 py-2.5">
-            <span>
-              <span className="block text-sm font-medium">Prefill from a compose file</span>
-              <span className="block text-xs text-muted-foreground">Take ports, variables, volumes, devices and build settings from the repo's docker-compose files.</span>
-            </span>
+          <div className="rounded-lg border px-3 py-2.5">
             <Switch
-              checked={fromCompose}
-              onCheckedChange={(on) => {
+              label="Prefill from a compose file"
+              description="Take ports, variables, volumes, devices and build settings from the repo's docker-compose files."
+              value={fromCompose}
+              onChange={(on) => {
                 setFromCompose(on)
                 if (on) {
                   rescan()
                   setSettingsName(name)
                 }
               }}
+              labelPosition="start"
+              labelSpacing="spread"
+              width="100%"
             />
-          </label>
+          </div>
         )}
         {prefill && (
           <ComposePrefill
@@ -353,20 +366,19 @@ function CreateForm({ kind, onBack, onDone }: { kind: Kind; onBack: () => void; 
           />
         )}
         {kind === 'image' && (
-          <div className="space-y-2">
-            <Label htmlFor="create-image">Image</Label>
-            <Input id="create-image" value={image} onChange={(e) => setImage(e.target.value)} placeholder="nginx:alpine" className="font-mono" required />
-          </div>
+          <TextInput label="Image" value={image} onChange={setImage} placeholder="nginx:alpine" controlClassName="font-mono" isRequired width="100%" />
         )}
         <ErrorAlert error={create.error} />
       </div>
       <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button type="button" variant="ghost" onClick={onDone}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={create.isPending || (prefill && !stale && !service)}>
-          {stale ? 'Find compose files' : 'Create'}
-        </Button>
+        <Button type="button" variant="ghost" label="Cancel" onClick={onDone} />
+        <Button
+          type="submit"
+          variant="primary"
+          label={stale ? 'Find compose files' : 'Create'}
+          isLoading={create.isPending}
+          isDisabled={!stale && (missing || (prefill && !service))}
+        />
       </div>
     </form>
   )
@@ -412,9 +424,7 @@ function ComposePrefill({
     return (
       <div className="space-y-2">
         <ErrorAlert error={detected.error} />
-        <Button type="button" variant="outline" size="sm" onClick={onRescan}>
-          <RefreshCw /> Try again
-        </Button>
+        <Button type="button" variant="secondary" size="sm" icon={<RefreshCw />} label="Try again" onClick={onRescan} />
       </div>
     )
   const found = detected.data
@@ -432,30 +442,23 @@ function ComposePrefill({
   const warnings = [...(settings.data?.warnings ?? []), ...(service?.warnings ?? [])]
   return (
     <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
-      <div className="space-y-2">
-        <Label htmlFor="create-compose">Compose file</Label>
-        <Select value={selected.main} onValueChange={onMain}>
-          <SelectTrigger id="create-compose" className="w-full font-mono">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {found.files.map((f) => (
-              <SelectItem key={f} value={f} className="font-mono">
-                {f}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      <Selector
+        label="Compose file"
+        value={selected.main}
+        onChange={onMain}
+        options={found.files}
+        renderOption={(o) => <span className="font-mono">{o.label ?? o.value}</span>}
+        renderValue={(o) => <span className="font-mono">{o.label ?? o.value}</span>}
+        width="100%"
+      />
       {candidates.length > 0 && (
-        <div className="space-y-2">
-          <Label>Also apply</Label>
+        <div className="space-y-2" role="group" aria-labelledby="create-also-apply">
+          <div id="create-also-apply" className="text-sm font-medium">
+            Also apply
+          </div>
           <div className={cn('space-y-1.5', candidates.length > 5 && '-mx-3 max-h-36 overflow-y-auto px-3 py-1')}>
             {candidates.map((f) => (
-              <label key={f} className="flex cursor-pointer items-center gap-2 text-sm">
-                <Checkbox checked={selected.extra.includes(f)} onCheckedChange={(v) => onToggle(f, v === true)} />
-                <span className="truncate font-mono text-xs">{f}</span>
-              </label>
+              <CheckboxInput key={f} size="sm" label={f} value={selected.extra.includes(f)} onChange={(v) => onToggle(f, v)} />
             ))}
           </div>
           <p className="text-xs text-muted-foreground">Override files, like one that adds devices for hardware acceleration. Applied in this order.</p>
@@ -469,23 +472,18 @@ function ComposePrefill({
         service && (
           <>
             {services.length > 1 && (
-              <div className="space-y-2">
-                <Label htmlFor="create-service">Service</Label>
-                <Select value={service.service} onValueChange={onService}>
-                  <SelectTrigger id="create-service" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {services.map((s) => (
-                      <SelectItem key={s.service} value={s.service}>
-                        {s.service}
-                        <span className="text-muted-foreground">{s.build ? ' · builds from the repo' : ` · ${s.image}`}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">A deployment runs one container. Deploy the other services separately.</p>
-              </div>
+              <Selector
+                label="Service"
+                value={service.service}
+                onChange={onService}
+                options={services.map((s) => ({
+                  value: s.service,
+                  label: s.service,
+                  description: s.build ? 'Builds from the repo' : s.image,
+                }))}
+                description="A deployment runs one container. Deploy the other services separately."
+                width="100%"
+              />
             )}
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
               {summarize(service).map(([label, value]) => (

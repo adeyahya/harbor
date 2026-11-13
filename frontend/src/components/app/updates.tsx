@@ -1,15 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Ban, CheckCircle2, ChevronDown, ChevronRight, Loader2, Square, Undo2, X, XCircle } from 'lucide-react'
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { toast } from 'sonner'
 import { api, type Update } from '@/api'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
 import { duration, timeAgo } from '@/lib/format'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { Confirm } from './confirm'
 import { EmptyState, Loading } from './page'
 import { StatusPill, UpdateStatus } from './status'
+
+/**
+ * Button-styled span for actions that sit inside a row `<button>` (buttons
+ * can't nest, so an Astryx Button isn't an option there).
+ */
+const rowAction =
+  'inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border bg-card px-2.5 text-xs font-medium hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none [&_svg]:size-3.5'
 
 /**
  * Mutating operations return an Update record and keep running on the
@@ -96,22 +102,21 @@ function CancelButton({ u, compact = false }: { u: Update; compact?: boolean }) 
           {cancel.isPending ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
         </button>
       ) : (
-        <Button asChild variant="outline" size="sm" className={cn(cancel.isPending && 'pointer-events-none opacity-50')}>
-          {/* A span, since this can sit inside a row button. */}
-          <span
-            role="button"
-            tabIndex={0}
-            onClick={open}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                open(e)
-              }
-            }}
-          >
-            {cancel.isPending ? <Loader2 className="animate-spin" /> : <Square className="fill-current" />} Cancel
-          </span>
-        </Button>
+        // A span, since this can sit inside a row button.
+        <span
+          role="button"
+          tabIndex={0}
+          className={cn(rowAction, cancel.isPending && 'pointer-events-none opacity-50')}
+          onClick={open}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              open(e)
+            }
+          }}
+        >
+          {cancel.isPending ? <Loader2 className="animate-spin" /> : <Square className="fill-current" />} Cancel
+        </span>
       )}
       <Confirm
         open={confirming}
@@ -186,7 +191,7 @@ function TrayItem({ id, onDismiss }: { id: number; onDismiss: () => void }) {
   const [expanded, setExpanded] = useState(true)
   if (!data) return null
   return (
-    <div className="pointer-events-auto overflow-hidden rounded-xl border bg-popover shadow-2xl shadow-black/30 animate-in fade-in slide-in-from-bottom-2">
+    <div className="pointer-events-auto overflow-hidden rounded-xl border bg-popover shadow-2xl shadow-black/30 animate-rise-in">
       <div className="flex items-center gap-2.5 px-3 py-2.5 text-sm">
         <StatusIcon status={data.status} />
         <UpdateTitle u={data} />
@@ -207,31 +212,31 @@ function TrayItem({ id, onDismiss }: { id: number; onDismiss: () => void }) {
 function UpdateDialog({ id, onClose }: { id: number | null; onClose: () => void }) {
   const { data } = useUpdate(id)
   return (
-    <Dialog open={id !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+    <Dialog isOpen={id !== null} onOpenChange={(o) => !o && onClose()} width={768} maxHeight="85vh" padding={0}>
+      <div className="flex max-h-[85vh] flex-col overflow-hidden">
         {data ? (
           <>
-            <DialogHeader className="border-b px-5 py-4">
-              <DialogTitle className="flex items-center gap-3">
-                <UpdateTitle u={data} />
-                <UpdateStatus status={data.status} />
-                <span className="mr-6 ml-auto">
-                  <CancelButton u={data} />
+            <DialogHeader
+              className="border-b px-5 py-4"
+              onOpenChange={(o) => !o && onClose()}
+              title={
+                <span className="flex items-center gap-3">
+                  <UpdateTitle u={data} />
+                  <UpdateStatus status={data.status} />
                 </span>
-              </DialogTitle>
-              <DialogDescription>
-                {data.target_type} · by {data.username} · {timeAgo(data.started_at)} · took {duration(data.started_at, data.finished_at)}
-              </DialogDescription>
-            </DialogHeader>
+              }
+              endContent={<CancelButton u={data} />}
+              subtitle={`${data.target_type} · by ${data.username} · ${timeAgo(data.started_at)} · took ${duration(data.started_at, data.finished_at)}`}
+            />
             <LogBlock log={data.log} className="min-h-48 flex-1" />
           </>
         ) : (
           <>
-            <DialogTitle className="sr-only">Loading update</DialogTitle>
+            <DialogHeader title={<span className="sr-only">Loading update</span>} onOpenChange={(o) => !o && onClose()} />
             <Loading />
           </>
         )}
-      </DialogContent>
+      </div>
     </Dialog>
   )
 }
@@ -308,31 +313,25 @@ export function DeploymentHistory({ targetType, targetName }: { targetType: 'sta
             <UpdateStatus status={u.status} className="hidden sm:inline-flex" />
             <CancelButton u={u} />
             {canRollback(u) && (
-              <Button
-                asChild
-                variant="outline"
-                size="sm"
-                className="opacity-100 transition-opacity sm:opacity-0 sm:group-hover/row:opacity-100 sm:focus-visible:opacity-100"
-              >
-                {/* A span, since buttons can't nest inside the row button. */}
-                <span
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => {
+              // A span, since buttons can't nest inside the row button.
+              <span
+                role="button"
+                tabIndex={0}
+                className={cn(rowAction, 'opacity-100 transition-opacity sm:opacity-0 sm:group-hover/row:opacity-100 sm:focus-visible:opacity-100')}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setRollbackTo(u)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
                     e.stopPropagation()
                     setRollbackTo(u)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      setRollbackTo(u)
-                    }
-                  }}
-                >
-                  <Undo2 /> Rollback
-                </span>
-              </Button>
+                  }
+                }}
+              >
+                <Undo2 /> Rollback
+              </span>
             )}
           </button>
           {open === u.id && <ExpandedLog id={u.id} />}

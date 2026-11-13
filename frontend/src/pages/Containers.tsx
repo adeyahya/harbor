@@ -11,9 +11,9 @@ import { EmptyState, ErrorAlert, Loading, Page, PageHeader, Surface } from '@/co
 import { ServicePanel, usePanelTab } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
 import { useRunAction } from '@/components/app/updates'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@astryxdesign/core/Button'
+import { Tab, TabList } from '@astryxdesign/core/TabList'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { containerName } from '@/lib/format'
 
 export function ContainersPage() {
@@ -40,25 +40,27 @@ export function ContainersPage() {
         description={data ? `${running} running · ${data.length - running} stopped` : 'Every container on this Docker engine'}
         actions={
           <Confirm title="Prune stopped containers?" description="All stopped containers are removed. This can't be undone." confirmLabel="Prune" onConfirm={() => run.mutate({ path: '/docker/prune/containers' })}>
-            <Button variant="outline" size="sm">
-              Prune stopped
-            </Button>
+            <Button variant="secondary" size="sm" label="Prune stopped" />
           </Confirm>
         }
       />
       <ErrorAlert error={error} className="mb-4" />
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="relative w-full sm:w-72">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input placeholder="Search containers" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8" />
-        </div>
-        <Tabs value={state} onValueChange={setState}>
-          <TabsList>
-            <TabsTrigger value="all">All</TabsTrigger>
-            <TabsTrigger value="running">Running</TabsTrigger>
-            <TabsTrigger value="stopped">Stopped</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <TextInput
+          type="search"
+          label="Search containers"
+          isLabelHidden
+          placeholder="Search containers"
+          startIcon={Search}
+          value={search}
+          onChange={setSearch}
+          containerClassName="w-full sm:w-72"
+        />
+        <TabList value={state} onChange={setState} aria-label="Filter by state">
+          <Tab value="all" label="All" />
+          <Tab value="running" label="Running" />
+          <Tab value="stopped" label="Stopped" />
+        </TabList>
       </div>
       <Surface>
         {isLoading ? (

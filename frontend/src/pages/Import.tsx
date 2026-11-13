@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Box, GitBranch, Info, Layers, PackageOpen, TriangleAlert } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { toast } from 'sonner'
 import {
   api,
   ApiError,
@@ -19,14 +18,16 @@ import { GithubIcon } from '@/components/app/GithubIcon'
 import { ImportAllDialog } from '@/components/app/ImportAll'
 import { EmptyState, ErrorAlert, Loading, Page, PageHeader, Surface } from '@/components/app/page'
 import { StatusDot } from '@/components/app/status'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
+import { Button } from '@astryxdesign/core/Button'
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
+import { Switch } from '@astryxdesign/core/Switch'
+import { TextArea } from '@astryxdesign/core/TextArea'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { useGitAccounts } from '@/pages/Settings'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
+
+const SERVICE_NAME = /^[a-z0-9][a-z0-9_-]*$/
 
 export function useImportCandidates() {
   return useQuery({ queryKey: ['import'], queryFn: () => api.get<ImportCandidates>('/import'), refetchInterval: 15000 })
@@ -79,9 +80,7 @@ export function ImportPage() {
         actions={
           data &&
           stacks.length + containers.length > 1 && (
-            <Button onClick={() => setAll(true)}>
-              <PackageOpen /> Import all
-            </Button>
+            <Button variant="primary" icon={<PackageOpen />} label="Import all" onClick={() => setAll(true)} />
           )
         }
       />
@@ -130,9 +129,7 @@ export function ImportPage() {
                           ))}
                         </div>
                       </div>
-                      <Button size="sm" variant={s.is_komodo ? 'outline' : 'default'} disabled={!s.name_ok || s.is_harbor} onClick={() => setStack(s)}>
-                        Import
-                      </Button>
+                      <Button size="sm" variant={s.is_komodo ? 'secondary' : 'primary'} label="Import" isDisabled={!s.name_ok || s.is_harbor} onClick={() => setStack(s)} />
                     </div>
                     {s.is_harbor && <p className="mt-2 text-xs text-muted-foreground">This is Harbor itself. Update it with docker compose on the server.</p>}
                     {!s.name_ok && <p className="mt-2 text-xs text-warning">The project name isn't a valid stack name (lowercase letters, digits, - and _), so it can't be imported as-is.</p>}
@@ -163,9 +160,7 @@ export function ImportPage() {
                         {c.ports.length > 0 && ` · ${c.ports.join(', ')}`}
                       </div>
                     </div>
-                    <Button size="sm" variant={c.is_komodo ? 'outline' : 'default'} disabled={c.is_harbor} onClick={() => setContainer(c)}>
-                      Import
-                    </Button>
+                    <Button size="sm" variant={c.is_komodo ? 'secondary' : 'primary'} label="Import" isDisabled={c.is_harbor} onClick={() => setContainer(c)} />
                   </Surface>
                 ))}
               </div>
@@ -180,22 +175,10 @@ export function ImportPage() {
   )
 }
 
-function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  )
-}
-
 function ImportStackDialog({ candidate, onClose }: { candidate: ImportStackCandidate | null; onClose: () => void }) {
   return (
-    <Dialog open={candidate !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] gap-0 overflow-y-auto p-0 sm:max-w-lg">
-        {candidate && <ImportStackForm key={candidate.project} candidate={candidate} onClose={onClose} />}
-      </DialogContent>
+    <Dialog isOpen={candidate !== null} onOpenChange={(o) => !o && onClose()} width={512} maxHeight="90vh" purpose="form" padding={0}>
+      {candidate && <ImportStackForm key={candidate.project} candidate={candidate} onClose={onClose} />}
     </Dialog>
   )
 }
@@ -232,10 +215,12 @@ function ImportStackForm({ candidate, onClose }: { candidate: ImportStackCandida
         submit.mutate()
       }}
     >
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle>Import {candidate.project} as a stack</DialogTitle>
-        <DialogDescription className="font-mono text-xs break-all">{candidate.working_dir}</DialogDescription>
-      </DialogHeader>
+      <DialogHeader
+        className="border-b px-5 py-4"
+        title={`Import ${candidate.project} as a stack`}
+        subtitle={<span className="font-mono text-xs break-all">{candidate.working_dir}</span>}
+        onOpenChange={(o) => !o && onClose()}
+      />
       <div className="space-y-4 px-5 py-4">
         <NoRestartNote />
         {candidate.is_komodo && (
@@ -245,7 +230,7 @@ function ImportStackForm({ candidate, onClose }: { candidate: ImportStackCandida
         )}
         {candidate.git_url ? (
           <div className="space-y-3 rounded-lg border p-3">
-            <label className="flex cursor-pointer items-start justify-between gap-3">
+            <div className="flex items-start justify-between gap-3">
               <span>
                 <span className="flex items-center gap-1.5 text-sm font-medium">
                   <GithubIcon /> Use the git repository
@@ -254,16 +239,20 @@ function ImportStackForm({ candidate, onClose }: { candidate: ImportStackCandida
                   This directory is a checkout of {repoLabel(candidate.git_url)}. Deploys pull the branch in place, and auto-deploy can follow pushes.
                 </span>
               </span>
-              <Switch checked={useGit} onCheckedChange={setUseGit} />
-            </label>
+              <Switch label="Use the git repository" isLabelHidden value={useGit} onChange={setUseGit} />
+            </div>
             {useGit && (
               <div className="space-y-3 border-t pt-3">
-                <Field label="Repository">
-                  <Input value={gitUrl} onChange={(e) => setGitUrl(e.target.value)} className="font-mono" required />
-                </Field>
-                <Field label="Branch" hint="Empty uses the repository's default branch.">
-                  <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="Default branch" className="font-mono" />
-                </Field>
+                <TextInput label="Repository" value={gitUrl} onChange={setGitUrl} controlClassName="font-mono" isRequired width="100%" />
+                <TextInput
+                  label="Branch"
+                  value={branch}
+                  onChange={setBranch}
+                  placeholder="Default branch"
+                  description="Empty uses the repository's default branch."
+                  controlClassName="font-mono"
+                  width="100%"
+                />
                 <AccountHint url={gitUrl} hadCredentials={candidate.git_had_credentials} />
               </div>
             )}
@@ -272,19 +261,29 @@ function ImportStackForm({ candidate, onClose }: { candidate: ImportStackCandida
           <p className="text-sm text-muted-foreground">The compose file is copied into Harbor, where you can edit it. You can connect a GitHub repository later in Settings.</p>
         )}
         {(needsPaste || unreadable) && (
-          <Field label="Compose file" hint={`Harbor can't read ${candidate.config_files[0] ?? 'the compose file'} (if Harbor runs in Docker, mount that directory at the same path). Paste its contents instead.`}>
-            <Textarea value={compose} onChange={(e) => setCompose(e.target.value)} rows={8} className="font-mono text-[12.5px]" required />
-          </Field>
+          <TextArea
+            label="Compose file"
+            description={`Harbor can't read ${candidate.config_files[0] ?? 'the compose file'} (if Harbor runs in Docker, mount that directory at the same path). Paste its contents instead.`}
+            value={compose}
+            onChange={setCompose}
+            rows={8}
+            controlClassName="font-mono text-[12.5px]"
+            hasSpellCheck={false}
+            isRequired
+            width="100%"
+          />
         )}
         <ErrorAlert error={unreadable ? null : submit.error} />
       </div>
       <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={submit.isPending}>
-          Import stack
-        </Button>
+        <Button variant="ghost" label="Cancel" onClick={onClose} />
+        <Button
+          type="submit"
+          variant="primary"
+          label="Import stack"
+          isLoading={submit.isPending}
+          isDisabled={(useGit && !gitUrl.trim()) || ((needsPaste || unreadable) && !compose.trim())}
+        />
       </div>
     </form>
   )
@@ -317,10 +316,8 @@ function AccountHint({ url, hadCredentials }: { url: string; hadCredentials: boo
 
 function ImportContainerDialog({ candidate, onClose }: { candidate: ImportContainerCandidate | null; onClose: () => void }) {
   return (
-    <Dialog open={candidate !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] gap-0 overflow-y-auto p-0 sm:max-w-lg">
-        {candidate && <ImportContainerForm key={candidate.name} candidate={candidate} onClose={onClose} />}
-      </DialogContent>
+    <Dialog isOpen={candidate !== null} onOpenChange={(o) => !o && onClose()} width={512} maxHeight="90vh" purpose="form" padding={0}>
+      {candidate && <ImportContainerForm key={candidate.name} candidate={candidate} onClose={onClose} />}
     </Dialog>
   )
 }
@@ -361,15 +358,23 @@ function ImportContainerForm({ candidate, onClose }: { candidate: ImportContaine
         submit.mutate()
       }}
     >
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle>Import {candidate.name} as a deployment</DialogTitle>
-        <DialogDescription className="font-mono text-xs">{candidate.image}</DialogDescription>
-      </DialogHeader>
+      <DialogHeader
+        className="border-b px-5 py-4"
+        title={`Import ${candidate.name} as a deployment`}
+        subtitle={<span className="font-mono text-xs">{candidate.image}</span>}
+        onOpenChange={(o) => !o && onClose()}
+      />
       <div className="space-y-4 px-5 py-4">
         <NoRestartNote />
-        <Field label="Service name" hint={name !== candidate.name ? `The container is renamed from ${candidate.name} on its first deploy.` : undefined}>
-          <Input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} required pattern="[a-z0-9][a-z0-9_\-]*" />
-        </Field>
+        <TextInput
+          label="Service name"
+          value={name}
+          onChange={(v) => setName(v.toLowerCase())}
+          description={name !== candidate.name ? `The container is renamed from ${candidate.name} on its first deploy.` : undefined}
+          status={name && !SERVICE_NAME.test(name) ? { type: 'error', message: 'Use lowercase letters, digits, - and _.' } : undefined}
+          isRequired
+          width="100%"
+        />
         {preview.isLoading ? (
           <Loading className="py-6" />
         ) : p ? (
@@ -406,12 +411,8 @@ function ImportContainerForm({ candidate, onClose }: { candidate: ImportContaine
         <ErrorAlert error={submit.error} />
       </div>
       <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={submit.isPending || !p}>
-          Import deployment
-        </Button>
+        <Button variant="ghost" label="Cancel" onClick={onClose} />
+        <Button type="submit" variant="primary" label="Import deployment" isLoading={submit.isPending} isDisabled={!p || !SERVICE_NAME.test(name)} />
       </div>
     </form>
   )

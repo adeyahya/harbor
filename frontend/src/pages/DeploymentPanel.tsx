@@ -1,8 +1,13 @@
+import { Button } from '@astryxdesign/core/Button'
+import { DropdownMenu, DropdownMenuDivider, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Selector } from '@astryxdesign/core/Selector'
+import { TextArea } from '@astryxdesign/core/TextArea'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDownToLine, Box, ChevronsUp, CopyPlus, GitBranch, Hammer, Info, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { toast } from 'sonner'
 import { api, repoLabel, shortArtifact, type Deployment, type DeploymentDetail } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { ContainerDetails } from '@/components/app/containers'
@@ -16,13 +21,8 @@ import { AutoDeploySettings, SourceSettings, type SourceSettingsSet } from '@/co
 import { ChangesBar, ServicePanel, SettingsSection, usePanelTab, VariablesEditor } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
 import { DeploymentHistory, useRunAction } from '@/components/app/updates'
-import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Textarea } from '@/components/ui/textarea'
 import { timeAgo } from '@/lib/format'
+import { toast } from '@/lib/toast'
 
 const TABS = ['deployments', 'logs', 'terminal', 'variables', 'settings', 'container'] as const
 
@@ -53,16 +53,6 @@ const SETTINGS_FIELDS: (keyof Config)[] = FIELDS.filter((f) => f !== 'env')
 export function DeploymentPanel() {
   const { name = '' } = useParams()
   return <DeploymentPanelInner key={name} name={name} />
-}
-
-function Field({ label, hint, children, htmlFor }: { label: string; hint?: React.ReactNode; children: React.ReactNode; htmlFor?: string }) {
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  )
 }
 
 function DeploymentPanelInner({ name }: { name: string }) {
@@ -183,60 +173,40 @@ function DeploymentPanelInner({ name }: { name: string }) {
       onTabChange={setTab}
       actions={
         <>
-          <Button size="sm" onClick={() => action('deploy')} disabled={run.isPending || save.isPending} title={promoted ? `Promote ${upstream?.name ?? 'the upstream'}'s current deploy` : undefined}>
-            {promoted ? <ChevronsUp /> : <Play />} {promoted ? 'Promote' : deployed ? 'Redeploy' : 'Deploy'}
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon-sm" aria-label="More actions">
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              {git && (
-                <DropdownMenuItem onSelect={() => action('rebuild')} title="Build the branch again even if its commit was built before, checking for newer base images">
-                  <Hammer /> Rebuild
-                </DropdownMenuItem>
-              )}
-              {data.source === 'image' && (
-                <DropdownMenuItem onSelect={() => action('pull')}>
-                  <ArrowDownToLine /> Pull image
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onSelect={() => setNewEnv(true)}>
-                <CopyPlus /> New environment…
-              </DropdownMenuItem>
-              {deployed && (
-                <>
-                  {data.status === 'running' ? (
-                    <>
-                      <DropdownMenuItem onSelect={() => action('restart')}>
-                        <RotateCw /> Restart
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => action('stop')}>
-                        <Square /> Stop
-                      </DropdownMenuItem>
-                    </>
-                  ) : (
-                    <DropdownMenuItem onSelect={() => action('start')}>
-                      <Power /> Start
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onSelect={() => setConfirm('destroy')}>
-                    <Trash2 /> Remove container
-                  </DropdownMenuItem>
-                </>
-              )}
-              {!deployed && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onSelect={() => setConfirm('delete')}>
-                    <Trash2 /> Delete deployment
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
+          <Button
+            variant="primary"
+            size="sm"
+            label={promoted ? 'Promote' : deployed ? 'Redeploy' : 'Deploy'}
+            icon={promoted ? <ChevronsUp /> : <Play />}
+            onClick={() => action('deploy')}
+            isDisabled={run.isPending || save.isPending}
+            tooltip={promoted ? `Promote ${upstream?.name ?? 'the upstream'}'s current deploy` : undefined}
+          />
+          <DropdownMenu
+            alignment="end"
+            menuWidth={176}
+            hasChevron={false}
+            renderTrigger={(p) => <IconButton {...p} variant="secondary" size="sm" label="More actions" icon={<MoreHorizontal />} />}
+          >
+            {git && (
+              <DropdownMenuItem
+                icon={<Hammer />}
+                label="Rebuild"
+                description="Even if this commit was built before"
+                onClick={() => action('rebuild')}
+              />
+            )}
+            {data.source === 'image' && <DropdownMenuItem icon={<ArrowDownToLine />} label="Pull image" onClick={() => action('pull')} />}
+            <DropdownMenuItem icon={<CopyPlus />} label="New environment…" onClick={() => setNewEnv(true)} />
+            {deployed && data.status === 'running' && <DropdownMenuItem icon={<RotateCw />} label="Restart" onClick={() => action('restart')} />}
+            {deployed && data.status === 'running' && <DropdownMenuItem icon={<Square />} label="Stop" onClick={() => action('stop')} />}
+            {deployed && data.status !== 'running' && <DropdownMenuItem icon={<Power />} label="Start" onClick={() => action('start')} />}
+            <DropdownMenuDivider />
+            {deployed ? (
+              <DropdownMenuItem icon={<Trash2 />} label="Remove container" variant="destructive" onClick={() => setConfirm('destroy')} />
+            ) : (
+              <DropdownMenuItem icon={<Trash2 />} label="Delete deployment" variant="destructive" onClick={() => setConfirm('delete')} />
+            )}
           </DropdownMenu>
         </>
       }
@@ -268,7 +238,7 @@ function DeploymentPanelInner({ name }: { name: string }) {
         (data.container ? (
           <LogViewer containerId={data.container.Id} className="h-[calc(100vh-15rem)] min-h-96" />
         ) : (
-          <EmptyState icon={<Box />} title="Not deployed" action={<Button onClick={() => action('deploy')}>Deploy now</Button>}>
+          <EmptyState icon={<Box />} title="Not deployed" action={<Button variant="primary" label="Deploy now" onClick={() => action('deploy')} />}>
             Deploy to start a container and stream its logs.
           </EmptyState>
         ))}
@@ -277,7 +247,7 @@ function DeploymentPanelInner({ name }: { name: string }) {
         (data.container ? (
           <Terminal containerId={data.container.Id} running={data.container.State.Running} className="h-[calc(100vh-15rem)] min-h-96" />
         ) : (
-          <EmptyState icon={<Box />} title="Not deployed" action={<Button onClick={() => action('deploy')}>Deploy now</Button>}>
+          <EmptyState icon={<Box />} title="Not deployed" action={<Button variant="primary" label="Deploy now" onClick={() => action('deploy')} />}>
             Deploy to start a container you can open a terminal in.
           </EmptyState>
         ))}
@@ -307,70 +277,77 @@ function DeploymentPanelInner({ name }: { name: string }) {
           <SettingsSection title="Networking" description="Publish container ports on this host. Taken ports are flagged as you type.">
             <div className="space-y-4">
               <PortsEditor value={config.ports} onChange={set('ports')} owner={`deployment:${data.name}`} image={data.image} />
-              <Field label="Network" hint="Empty uses the default bridge network.">
-                <Input value={config.network} onChange={(e) => set('network')(e.target.value)} placeholder="bridge" className="font-mono sm:w-72" />
-              </Field>
+              <TextInput
+                label="Network"
+                description="Empty uses the default bridge network."
+                value={config.network}
+                onChange={set('network')}
+                placeholder="bridge"
+                controlClassName="font-mono"
+                containerClassName="sm:w-72"
+              />
             </div>
           </SettingsSection>
           <SettingsSection title="Labels" description="Container labels, e.g. Traefik routing rules. Applied on the next deploy.">
             <VariablesEditor value={config.labels} onChange={set('labels')} secret={false} keyPlaceholder="traefik.enable" noun="label" />
           </SettingsSection>
           <SettingsSection title="Volumes" description="Mount host paths or named volumes into the container.">
-            <Textarea value={config.volumes} onChange={(e) => set('volumes')(e.target.value)} rows={3} placeholder={'app-data:/data\n/srv/config:/config:ro'} className="font-mono text-[12.5px]" />
+            <TextArea
+              label="Volumes"
+              isLabelHidden
+              value={config.volumes}
+              onChange={set('volumes')}
+              rows={3}
+              placeholder={'app-data:/data\n/srv/config:/config:ro'}
+              hasSpellCheck={false}
+              width="100%"
+              controlClassName="font-mono text-[12.5px]"
+            />
           </SettingsSection>
           <SettingsSection title="Devices" description="Host devices for the container, e.g. /dev/dri for hardware acceleration. Applied on the next deploy.">
             <div className="space-y-4">
-              <Field label="Devices" hint="One per line: /dev/host, /dev/host:/dev/container, or with permissions like :rw." htmlFor="dep-devices">
-                <Textarea
-                  id="dep-devices"
-                  value={config.devices}
-                  onChange={(e) => set('devices')(e.target.value)}
-                  rows={3}
-                  placeholder={'/dev/dri\n/dev/rga'}
-                  className="font-mono text-[12.5px]"
-                />
-              </Field>
-              <Field label="Extra groups" hint="Groups the container's user joins to use the devices, one per line (names or ids)." htmlFor="dep-groups">
-                <Textarea
-                  id="dep-groups"
-                  value={config.group_add}
-                  onChange={(e) => set('group_add')(e.target.value)}
-                  rows={2}
-                  placeholder={'video\nrender'}
-                  className="font-mono text-[12.5px] sm:w-72"
-                />
-              </Field>
+              <TextArea
+                label="Devices"
+                description="One per line: /dev/host, /dev/host:/dev/container, or with permissions like :rw."
+                value={config.devices}
+                onChange={set('devices')}
+                rows={3}
+                placeholder={'/dev/dri\n/dev/rga'}
+                hasSpellCheck={false}
+                width="100%"
+                controlClassName="font-mono text-[12.5px]"
+              />
+              <TextArea
+                label="Extra groups"
+                description="Groups the container's user joins to use the devices, one per line (names or ids)."
+                value={config.group_add}
+                onChange={set('group_add')}
+                rows={2}
+                placeholder={'video\nrender'}
+                hasSpellCheck={false}
+                containerClassName="sm:w-72"
+                controlClassName="font-mono text-[12.5px]"
+              />
             </div>
           </SettingsSection>
           <SettingsSection title="Deploy" description="How the container runs.">
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Restart policy">
-                <Select value={config.restart} onValueChange={set('restart')}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {['unless-stopped', 'always', 'on-failure', 'no'].map((r) => (
-                      <SelectItem key={r} value={r}>
-                        {r}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Start command" hint="Overrides the image's default command.">
-                <Input value={config.command} onChange={(e) => set('command')(e.target.value)} placeholder="(image default)" className="font-mono" />
-              </Field>
+              <Selector label="Restart policy" width="100%" value={config.restart} onChange={set('restart')} options={['unless-stopped', 'always', 'on-failure', 'no']} />
+              <TextInput
+                label="Start command"
+                description="Overrides the image's default command."
+                value={config.command}
+                onChange={set('command')}
+                placeholder="(image default)"
+                width="100%"
+                controlClassName="font-mono"
+              />
             </div>
           </SettingsSection>
           <SettingsSection title="Danger zone" description="Remove the container first, then the deployment can be deleted." danger>
             <div className="flex flex-wrap gap-2">
-              <Button variant="destructive" size="sm" disabled={!deployed} onClick={() => setConfirm('destroy')}>
-                <Trash2 /> Remove container
-              </Button>
-              <Button variant="destructive" size="sm" disabled={deployed} onClick={() => setConfirm('delete')}>
-                <Trash2 /> Delete deployment
-              </Button>
+              <Button variant="destructive" size="sm" label="Remove container" icon={<Trash2 />} isDisabled={!deployed} onClick={() => setConfirm('destroy')} />
+              <Button variant="destructive" size="sm" label="Delete deployment" icon={<Trash2 />} isDisabled={deployed} onClick={() => setConfirm('delete')} />
             </div>
           </SettingsSection>
         </div>
@@ -380,9 +357,7 @@ function DeploymentPanelInner({ name }: { name: string }) {
         (data.container ? (
           <div className="space-y-3">
             <ContainerDetails c={data.container} />
-            <Button variant="outline" size="sm" asChild>
-              <Link to={`/containers/${data.container.Id}`}>Open in containers</Link>
-            </Button>
+            <Button variant="secondary" size="sm" label="Open in containers" href={`/containers/${data.container.Id}`} />
           </div>
         ) : (
           <EmptyState icon={<Box />} title="No container">This deployment hasn't been deployed yet.</EmptyState>

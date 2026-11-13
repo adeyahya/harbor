@@ -1,6 +1,10 @@
+/* Cascade order: Astryx component styles sit between Tailwind's base and utilities. */
+@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
+
 @import 'tailwindcss';
-@import 'tw-animate-css';
-@import 'shadcn/tailwind.css';
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '@astryxdesign/theme-neutral/theme.css';
 @import '@fontsource-variable/inter';
 @import '@fontsource-variable/jetbrains-mono';
 
@@ -62,6 +66,29 @@
   --log: #0e0c15;
 }
 
+/*
+ * Map the Harbor palette onto Astryx's tokens so its components match the rest
+ * of the app. Unlayered, so it beats the neutral theme's astryx-theme layer.
+ */
+[data-astryx-theme] {
+  --font-family-body: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-family-heading: var(--font-family-body);
+  --font-family-code: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+  --color-accent: #5e4596;
+  --color-on-accent: #ffffff;
+  --color-accent-muted: light-dark(#eceaf3, #2a2737);
+  --color-background-body: light-dark(#fafafb, #13111c);
+  --color-background-surface: light-dark(#ffffff, #1b1925);
+  --color-background-card: light-dark(#ffffff, #1b1925);
+  --color-background-popover: light-dark(#ffffff, #1e1c29);
+  --color-text-primary: light-dark(#13111c, #eeedf3);
+  --color-text-secondary: light-dark(#6b6879, #9c99ab);
+  --color-border: light-dark(#e5e3ec, #2c2939);
+  --color-border-emphasized: light-dark(#dddae6, #34313f);
+  --color-error: light-dark(#dc3545, #f2555a);
+  --color-success: light-dark(#17a36b, #37cd8f);
+}
+
 @theme inline {
   --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
   --font-heading: var(--font-sans);
@@ -104,7 +131,8 @@
   }
   html,
   body,
-  #root {
+  #root,
+  #root > [data-astryx-theme] {
     height: 100%;
   }
   html {
@@ -132,4 +160,15 @@
 @utility scrollbar-thin {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+}
+
+/* Entrance for the action trays: fade up from 0.5rem below. */
+@theme {
+  --animate-rise-in: rise-in 150ms ease-out;
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem);
+    }
+  }
 }

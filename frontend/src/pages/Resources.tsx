@@ -2,16 +2,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Boxes, HardDrive, Network as NetworkIcon, Search, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Outlet, useNavigate } from 'react-router'
-import { toast } from 'sonner'
 import { api, type ImageSummary, type Network, type Volume } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { EmptyState, ErrorAlert, Loading, Page, PageHeader, Surface } from '@/components/app/page'
 import { Status } from '@/components/app/status'
 import { useRunAction } from '@/components/app/updates'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Button } from '@astryxdesign/core/Button'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow } from '@astryxdesign/core/Table'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { bytes, shortId, timeAgo } from '@/lib/format'
+import { toast } from '@/lib/toast'
 
 interface Column<T> {
   head: string
@@ -58,30 +59,34 @@ function ResourcePage<T>(props: {
         description={data && props.description?.(data)}
         actions={
           <Confirm title={props.prune.title} description={props.prune.description} confirmLabel="Prune" onConfirm={() => run.mutate({ path: `/docker/prune/${props.prune.kind}` })}>
-            <Button variant="outline" size="sm">
-              Prune unused
-            </Button>
+            <Button variant="secondary" size="sm" label="Prune unused" />
           </Confirm>
         }
       />
       <ErrorAlert error={error} className="mb-4" />
-      <div className="relative mb-3 w-full sm:w-72">
-        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input placeholder={`Search ${props.title.toLowerCase()}`} value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8" />
-      </div>
+      <TextInput
+        type="search"
+        label={`Search ${props.title.toLowerCase()}`}
+        isLabelHidden
+        placeholder={`Search ${props.title.toLowerCase()}`}
+        startIcon={Search}
+        value={search}
+        onChange={setSearch}
+        containerClassName="mb-3 w-full sm:w-72"
+      />
       <Surface>
         {isLoading ? (
           <Loading />
         ) : items.length ? (
-          <Table>
+          <Table hasHover={!!props.linkOf}>
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
+              <TableRow isHeaderRow>
                 {props.columns.map((c, i) => (
-                  <TableHead key={c.head} className={i === 0 ? `pl-4 ${c.className ?? ''}` : c.className}>
+                  <TableHeaderCell key={c.head} className={i === 0 ? `pl-4 ${c.className ?? ''}` : c.className}>
                     {c.head}
-                  </TableHead>
+                  </TableHeaderCell>
                 ))}
-                <TableHead className="w-12" />
+                <TableHeaderCell className="w-14 min-w-14" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -99,9 +104,7 @@ function ResourcePage<T>(props: {
                   {/* Dialogs portal out but their events still bubble here; keep them off the row. */}
                   <TableCell className="pr-3 text-right" onClick={(e) => e.stopPropagation()}>
                     {(props.removable?.(item) ?? true) && (
-                      <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => setPending(item)} aria-label="Remove">
-                        <Trash2 />
-                      </Button>
+                      <IconButton variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" label="Remove" icon={<Trash2 />} onClick={() => setPending(item)} />
                     )}
                   </TableCell>
                 </TableRow>

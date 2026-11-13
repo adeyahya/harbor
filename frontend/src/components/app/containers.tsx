@@ -2,9 +2,9 @@ import { MoreHorizontal, Play, RotateCw, ScrollText, Square, Trash2 } from 'luci
 import { useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
 import type { ContainerInspect, ContainerSummary, Port } from '@/api'
-import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { DropdownMenu, DropdownMenuDivider, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow } from '@astryxdesign/core/Table'
 import { containerName, shortId, timeAgo } from '@/lib/format'
 import { Confirm } from './confirm'
 import { Status } from './status'
@@ -48,37 +48,27 @@ export function ContainerMenu({ id, state, name }: { id: string; state: string; 
   const act = (action: string) => run.mutate({ path: `/docker/containers/${id}/${action}` })
   return (
     <>
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" onClick={(e) => e.stopPropagation()} aria-label="Container actions">
-          <MoreHorizontal />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-        <DropdownMenuItem onSelect={() => navigate(`/containers/${id}`)}>
-          <ScrollText /> View logs
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
+    {/* Menus render inside this span in the React tree; keep their clicks off parent rows. */}
+    <span className="contents" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenu
+        alignment="end"
+        hasChevron={false}
+        renderTrigger={(props) => <IconButton {...props} variant="ghost" size="sm" label="Container actions" icon={<MoreHorizontal />} />}
+      >
+        <DropdownMenuItem icon={<ScrollText />} label="View logs" onClick={() => navigate(`/containers/${id}`)} />
+        <DropdownMenuDivider />
         {state === 'running' ? (
           <>
-            <DropdownMenuItem onSelect={() => act('restart')}>
-              <RotateCw /> Restart
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => act('stop')}>
-              <Square /> Stop
-            </DropdownMenuItem>
+            <DropdownMenuItem icon={<RotateCw />} label="Restart" onClick={() => act('restart')} />
+            <DropdownMenuItem icon={<Square />} label="Stop" onClick={() => act('stop')} />
           </>
         ) : (
-          <DropdownMenuItem onSelect={() => act('start')}>
-            <Play /> Start
-          </DropdownMenuItem>
+          <DropdownMenuItem icon={<Play />} label="Start" onClick={() => act('start')} />
         )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={() => setConfirming(true)}>
-          <Trash2 /> Remove
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        <DropdownMenuDivider />
+        <DropdownMenuItem variant="destructive" icon={<Trash2 />} label="Remove" onClick={() => setConfirming(true)} />
+      </DropdownMenu>
+    </span>
     <Confirm
       open={confirming}
       onOpenChange={setConfirming}
@@ -94,16 +84,16 @@ export function ContainerMenu({ id, state, name }: { id: string; state: string; 
 export function ContainersTable({ containers, showStack = true }: { containers: ContainerSummary[]; showStack?: boolean }) {
   const navigate = useNavigate()
   return (
-    <Table>
+    <Table hasHover>
       <TableHeader>
-        <TableRow className="hover:bg-transparent">
-          <TableHead className="pl-4">Name</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead className="hidden md:table-cell">Image</TableHead>
-          <TableHead>Ports</TableHead>
-          {showStack && <TableHead className="hidden lg:table-cell">Stack</TableHead>}
-          <TableHead className="hidden sm:table-cell">Created</TableHead>
-          <TableHead className="w-10" />
+        <TableRow isHeaderRow>
+          <TableHeaderCell className="pl-4">Name</TableHeaderCell>
+          <TableHeaderCell>Status</TableHeaderCell>
+          <TableHeaderCell className="hidden md:table-cell">Image</TableHeaderCell>
+          <TableHeaderCell>Ports</TableHeaderCell>
+          {showStack && <TableHeaderCell className="hidden lg:table-cell">Stack</TableHeaderCell>}
+          <TableHeaderCell className="hidden sm:table-cell">Created</TableHeaderCell>
+          <TableHeaderCell className="w-14 min-w-14" />
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -119,8 +109,10 @@ export function ContainersTable({ containers, showStack = true }: { containers: 
               <TableCell>
                 <Status status={c.State} />
               </TableCell>
-              <TableCell className="hidden max-w-52 truncate font-mono text-xs text-muted-foreground md:table-cell" title={c.Image}>
-                {c.Image}
+              <TableCell className="hidden max-w-52 font-mono text-xs text-muted-foreground md:table-cell">
+                <div className="truncate" title={c.Image}>
+                  {c.Image}
+                </div>
               </TableCell>
               <TableCell>
                 <PortChips ports={c.Ports} />

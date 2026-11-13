@@ -3,12 +3,11 @@ import { ChevronsUp, Info } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { api, shortArtifact, type Deployment, type DeploymentListItem, type Promotable, type Update } from '@/api'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
+import { Button } from '@astryxdesign/core/Button'
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
+import { Selector } from '@astryxdesign/core/Selector'
+import { Switch } from '@astryxdesign/core/Switch'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { timeAgo } from '@/lib/format'
 import { Confirm } from './confirm'
 import { ErrorAlert, Loading } from './page'
@@ -104,9 +103,14 @@ export function PromotePanel({ deployment: d }: { deployment: Deployment }) {
           <span>
             {upstream.name} is running a deploy that {d.name} doesn't have yet.
           </span>
-          <Button size="sm" onClick={() => setTarget(current)} disabled={!current.available || run.isPending}>
-            <ChevronsUp /> Promote
-          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<ChevronsUp />}
+            label="Promote"
+            onClick={() => setTarget(current)}
+            isDisabled={!current.available || run.isPending}
+          />
         </div>
       )}
 
@@ -133,9 +137,14 @@ export function PromotePanel({ deployment: d }: { deployment: Deployment }) {
                       <span className="capitalize">{u.operation}</span> #{u.id} · {timeAgo(u.started_at)} by {u.username}
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" disabled={isLive || !u.available || run.isPending} onClick={() => setTarget(u)}>
-                    <ChevronsUp /> Promote
-                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<ChevronsUp />}
+                    label="Promote"
+                    isDisabled={isLive || !u.available || run.isPending}
+                    onClick={() => setTarget(u)}
+                  />
                 </div>
               )
             })}
@@ -162,19 +171,15 @@ export function UpstreamField({ selfId, value, onChange }: { selfId?: number; va
   const options = list.filter((x) => x.id !== selfId)
   return (
     <div className="space-y-2">
-      <Label htmlFor="src-upstream">Promote from</Label>
-      <Select value={value === null ? undefined : String(value)} onValueChange={(v) => onChange(Number(v))}>
-        <SelectTrigger id="src-upstream" className="w-full sm:w-80">
-          <SelectValue placeholder="Choose a deployment…" />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((x) => (
-            <SelectItem key={x.id} value={String(x.id)}>
-              {x.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <Selector
+        label="Promote from"
+        value={value === null ? undefined : String(value)}
+        onChange={(v) => onChange(Number(v))}
+        options={options.map((x) => ({ value: String(x.id), label: x.name }))}
+        placeholder="Choose a deployment…"
+        containerClassName="w-full sm:w-80"
+        width="100%"
+      />
       <p className="text-xs text-muted-foreground">
         Runs the exact image one of its deploys ran (e.g. staging → production), with this deployment's own ports, variables and volumes. Nothing is
         rebuilt, so settings baked in at build time (build arguments, variables compiled into a frontend bundle) are the same as upstream; pass
@@ -188,13 +193,15 @@ export function UpstreamField({ selfId, value, onChange }: { selfId?: number; va
 export function AutoPromoteSettings({ upstream, enabled, onEnabledChange }: { upstream: string; enabled: boolean; onEnabledChange: (v: boolean) => void }) {
   return (
     <SettingsSection title="Promote automatically" description={`Promote every successful deploy of ${upstream || 'the upstream'} as soon as it finishes.`}>
-      <label className="flex cursor-pointer items-start justify-between gap-4">
-        <span>
-          <span className="block text-sm font-medium">Auto-promote</span>
-          <span className="block text-xs text-muted-foreground">Leave this off for production to promote by hand once the upstream looks good.</span>
-        </span>
-        <Switch checked={enabled} onCheckedChange={onEnabledChange} />
-      </label>
+      <Switch
+        label="Auto-promote"
+        description="Leave this off for production to promote by hand once the upstream looks good."
+        value={enabled}
+        onChange={onEnabledChange}
+        labelPosition="start"
+        labelSpacing="spread"
+        width="100%"
+      />
     </SettingsSection>
   )
 }
@@ -209,6 +216,7 @@ export function CreateEnvironmentDialog({ source, open, onOpenChange }: { source
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [name, setName] = useState(() => suggestName(source.name))
+  const nameValid = /^[a-z0-9][a-z0-9_-]*$/.test(name)
   const create = useMutation({
     mutationFn: () =>
       api.post<Deployment>('/deployments', {
@@ -227,32 +235,30 @@ export function CreateEnvironmentDialog({ source, open, onOpenChange }: { source
     },
   })
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md">
+    <Dialog isOpen={open} onOpenChange={onOpenChange} width={448} padding={0} purpose="form">
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            create.mutate()
+            if (nameValid) create.mutate()
           }}
         >
-          <DialogHeader className="border-b px-5 py-4">
-            <DialogTitle>New environment</DialogTitle>
-            <DialogDescription>
-              A deployment that runs the images {source.name} deploys, promoted by hand or automatically, with its own settings.
-            </DialogDescription>
-          </DialogHeader>
+          <DialogHeader
+            className="px-5 py-4"
+            title="New environment"
+            subtitle={`A deployment that runs the images ${source.name} deploys, promoted by hand or automatically, with its own settings.`}
+            onOpenChange={onOpenChange}
+            hasDivider
+          />
           <div className="space-y-4 px-5 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="env-name">Service name</Label>
-              <Input
-                id="env-name"
-                value={name}
-                onChange={(e) => setName(e.target.value.toLowerCase())}
-                autoFocus
-                required
-                pattern="[a-z0-9][a-z0-9_\-]*"
-              />
-            </div>
+            <TextInput
+              label="Service name"
+              value={name}
+              onChange={(v) => setName(v.toLowerCase())}
+              status={name && !nameValid ? { type: 'error', message: 'Start with a letter or digit; use only a-z, 0-9, - and _.' } : undefined}
+              hasAutoFocus
+              isRequired
+              width="100%"
+            />
             <p className="text-xs text-muted-foreground">
               Variables, network, restart policy and command are copied from {source.name}. Ports, volumes and labels aren't, so the two environments don't
               clash or share data: set them next.
@@ -260,15 +266,10 @@ export function CreateEnvironmentDialog({ source, open, onOpenChange }: { source
             <ErrorAlert error={create.error} />
           </div>
           <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={create.isPending}>
-              Create
-            </Button>
+            <Button type="button" variant="ghost" label="Cancel" onClick={() => onOpenChange(false)} />
+            <Button type="submit" variant="primary" label="Create" isLoading={create.isPending} isDisabled={!nameValid} />
           </div>
         </form>
-      </DialogContent>
     </Dialog>
   )
 }

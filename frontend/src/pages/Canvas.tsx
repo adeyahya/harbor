@@ -1,3 +1,4 @@
+import { Button } from '@astryxdesign/core/Button'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, Box, ChevronsUp, Cpu, FolderPlus, GitBranch, HardDrive, Layers, MemoryStick, PackageOpen, Pin, Plus } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
@@ -9,7 +10,6 @@ import { GithubIcon } from '@/components/app/GithubIcon'
 import { ErrorAlert, Loading } from '@/components/app/page'
 import { isBehind } from '@/components/app/promote'
 import { StatusDot } from '@/components/app/status'
-import { Button } from '@/components/ui/button'
 import { bytes, containerName, percent } from '@/lib/format'
 import { importableCount, useImportCandidates } from '@/pages/Import'
 import { cn } from '@/lib/utils'
@@ -88,15 +88,9 @@ function EmptyCanvas() {
       <h2 className="text-xl font-semibold">Nothing deployed yet</h2>
       <p className="mt-2 text-sm text-muted-foreground">Deploy from a GitHub repo, run an image, or start a compose stack.</p>
       <div className="mt-6 flex flex-wrap justify-center gap-2">
-        <Button onClick={() => create('repo')}>
-          <GithubIcon /> GitHub repo
-        </Button>
-        <Button variant="outline" onClick={() => create('image')}>
-          <Box /> Docker image
-        </Button>
-        <Button variant="outline" onClick={() => create('stack')}>
-          <Layers /> Stack
-        </Button>
+        <Button variant="primary" label="GitHub repo" icon={<GithubIcon />} onClick={() => create('repo')} />
+        <Button variant="secondary" label="Docker image" icon={<Box />} onClick={() => create('image')} />
+        <Button variant="secondary" label="Stack" icon={<Layers />} onClick={() => create('stack')} />
       </div>
     </div>
   )
@@ -274,9 +268,7 @@ export function CanvasPage() {
             <Section
               title={pinned.length || groups.data?.length ? 'Other services' : 'Services'}
               actions={
-                <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setNewGroup(true)}>
-                  <FolderPlus /> New group
-                </Button>
+                <Button variant="ghost" size="sm" label="New group" icon={<FolderPlus />} onClick={() => setNewGroup(true)} />
               }
             >
               <Grid>

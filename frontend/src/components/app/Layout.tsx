@@ -3,18 +3,11 @@ import { ChevronsUpDown, LogOut, Moon, Plus, Search, Server, Settings, Sun } fro
 import { useTheme } from 'next-themes'
 import { NavLink, Outlet, useNavigate } from 'react-router'
 import { api, type AuthStatus, type SystemOverview, type User } from '@/api'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Kbd } from '@/components/ui/kbd'
+import { Avatar } from '@astryxdesign/core/Avatar'
+import { Button } from '@astryxdesign/core/Button'
+import { DropdownMenu, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Kbd } from '@astryxdesign/core/Kbd'
 import { cn } from '@/lib/utils'
 import { useCommandMenu } from './CommandMenu'
 import { useCreate } from './CreateDialog'
@@ -86,43 +79,39 @@ export function Layout({ user }: { user: User }) {
           <NavTabs className="ml-4 hidden lg:flex" />
 
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={openCommand} className="hidden w-48 justify-start text-muted-foreground sm:inline-flex">
-              <Search /> Search…
-              <Kbd className="ml-auto">⌘K</Kbd>
+            <Button variant="secondary" size="sm" label="Search" icon={<Search />} onClick={openCommand} width={192} className="hidden text-muted-foreground sm:inline-flex">
+              <span className="flex flex-1 items-center gap-2">
+                Search…
+                <Kbd keys="mod+k" className="ml-auto" />
+              </span>
             </Button>
-            <Button variant="outline" size="icon-sm" onClick={openCommand} className="sm:hidden" aria-label="Search">
-              <Search />
+            <IconButton variant="secondary" size="sm" label="Search" icon={<Search />} onClick={openCommand} className="sm:hidden" />
+            <Button variant="primary" size="sm" label="Create" icon={<Plus />} onClick={() => create()}>
+              <span className="hidden sm:inline">Create</span>
             </Button>
-            <Button size="sm" onClick={() => create()}>
-              <Plus /> <span className="hidden sm:inline">Create</span>
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-1 rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50" aria-label="Account menu">
-                  <Avatar className="size-7">
-                    <AvatarFallback className="bg-primary text-xs font-semibold text-primary-foreground uppercase">{user.username[0]}</AvatarFallback>
-                  </Avatar>
+            <DropdownMenu
+              alignment="end"
+              menuWidth={208}
+              renderTrigger={(props) => (
+                <button {...props} className="flex items-center gap-1 rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50" aria-label="Account menu">
+                  <Avatar name={user.username} size={32} />
                   <ChevronsUpDown className="hidden size-3.5 text-muted-foreground sm:block" />
                 </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuLabel>
+              )}
+              header={
+                <div className="px-3 py-2">
                   <div className="text-sm font-medium text-foreground">{user.username}</div>
                   <div className="text-xs font-normal text-muted-foreground">Administrator</div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuGroup>
-                  <DropdownMenuItem onSelect={() => navigate('/settings')}>
-                    <Settings /> Settings
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}>
-                    {resolvedTheme === 'dark' ? <Sun /> : <Moon />} {resolvedTheme === 'dark' ? 'Light' : 'Dark'} theme
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={logout}>
-                    <LogOut /> Sign out
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
+                </div>
+              }
+            >
+              <DropdownMenuItem icon={<Settings />} label="Settings" onClick={() => navigate('/settings')} />
+              <DropdownMenuItem
+                icon={resolvedTheme === 'dark' ? <Sun /> : <Moon />}
+                label={`${resolvedTheme === 'dark' ? 'Light' : 'Dark'} theme`}
+                onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+              />
+              <DropdownMenuItem icon={<LogOut />} label="Sign out" onClick={logout} />
             </DropdownMenu>
           </div>
         </div>

@@ -1,15 +1,5 @@
+import { AlertDialog } from '@astryxdesign/core/AlertDialog'
 import { useState, type ReactNode } from 'react'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 
 /**
  * Confirmation dialog for destructive actions. Wrap a trigger element, or
@@ -21,7 +11,7 @@ export function Confirm({
   open: controlledOpen,
   onOpenChange,
   title,
-  description,
+  description = '',
   confirmLabel = 'Confirm',
   destructive = true,
   onConfirm,
@@ -30,7 +20,7 @@ export function Confirm({
   open?: boolean
   onOpenChange?: (open: boolean) => void
   title: string
-  description?: ReactNode
+  description?: string
   confirmLabel?: string
   destructive?: boolean
   onConfirm: () => void
@@ -39,26 +29,25 @@ export function Confirm({
   const open = controlledOpen ?? uncontrolled
   const setOpen = onOpenChange ?? setUncontrolled
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      {children && <AlertDialogTrigger asChild>{children}</AlertDialogTrigger>}
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          {description && <AlertDialogDescription>{description}</AlertDialogDescription>}
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            variant={destructive ? 'destructive' : 'default'}
-            onClick={() => {
-              setOpen(false)
-              onConfirm()
-            }}
-          >
-            {confirmLabel}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <>
+      {/* `contents` keeps the trigger's own layout; the capture listener opens the dialog. */}
+      {children && (
+        <span className="contents" onClickCapture={() => setOpen(true)}>
+          {children}
+        </span>
+      )}
+      <AlertDialog
+        isOpen={open}
+        onOpenChange={setOpen}
+        title={title}
+        description={description}
+        actionLabel={confirmLabel}
+        actionVariant={destructive ? 'destructive' : 'primary'}
+        onAction={() => {
+          setOpen(false)
+          onConfirm()
+        }}
+      />
+    </>
   )
 }

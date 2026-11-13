@@ -4,7 +4,7 @@
 FROM node:22-bookworm-slim AS frontend
 WORKDIR /src/frontend
 RUN npm install -g pnpm@11.10.0
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 COPY frontend/ ./

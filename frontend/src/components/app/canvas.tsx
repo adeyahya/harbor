@@ -2,21 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, ChevronRight, FolderInput, FolderMinus, FolderPlus, MoreHorizontal, Pencil, Pin, PinOff, Trash2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
-import { toast } from 'sonner'
+import { Button } from '@astryxdesign/core/Button'
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
+import { DropdownMenu, DropdownMenuDivider, DropdownMenuItem, DropdownMenuSubMenu } from '@astryxdesign/core/DropdownMenu'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { api, type CanvasGroup } from '@/api'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { Confirm } from './confirm'
 import { Status, StatusDot } from './status'
@@ -76,15 +68,27 @@ export function GroupNameDialog({
   onSubmit: (name: string) => void
 }) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 p-0 sm:max-w-sm">
-        {open && <GroupNameForm title={title} initial={initial} submitLabel={submitLabel} onCancel={() => onOpenChange(false)} onSubmit={onSubmit} />}
-      </DialogContent>
+    <Dialog isOpen={open} onOpenChange={onOpenChange} width={384} purpose="form" padding={0}>
+      {open && (
+        <GroupNameForm title={title} initial={initial} submitLabel={submitLabel} onOpenChange={onOpenChange} onSubmit={onSubmit} />
+      )}
     </Dialog>
   )
 }
 
-function GroupNameForm({ title, initial, submitLabel, onCancel, onSubmit }: { title: string; initial: string; submitLabel: string; onCancel: () => void; onSubmit: (name: string) => void }) {
+function GroupNameForm({
+  title,
+  initial,
+  submitLabel,
+  onOpenChange,
+  onSubmit,
+}: {
+  title: string
+  initial: string
+  submitLabel: string
+  onOpenChange: (o: boolean) => void
+  onSubmit: (name: string) => void
+}) {
   const [name, setName] = useState(initial)
   return (
     <form
@@ -93,17 +97,21 @@ function GroupNameForm({ title, initial, submitLabel, onCancel, onSubmit }: { ti
         if (name.trim()) onSubmit(name.trim())
       }}
     >
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle>{title}</DialogTitle>
-      </DialogHeader>
+      <DialogHeader title={title} onOpenChange={onOpenChange} hasDivider className="px-5 py-4" />
       <div className="px-5 py-4">
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Production, Side projects" autoFocus maxLength={60} required />
+        <TextInput
+          label="Group name"
+          isLabelHidden
+          value={name}
+          onChange={(v) => setName(v.slice(0, 60))}
+          placeholder="e.g. Production, Side projects"
+          hasAutoFocus
+          width="100%"
+        />
       </div>
       <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button type="button" variant="ghost" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="submit">{submitLabel}</Button>
+        <Button variant="ghost" label="Cancel" onClick={() => onOpenChange(false)} />
+        <Button type="submit" variant="primary" label={submitLabel} isDisabled={!name.trim()} />
       </div>
     </form>
   )
@@ -115,38 +123,32 @@ export function CardMenu({ item, groups }: { item: CanvasItem; groups: CanvasGro
   const [creating, setCreating] = useState(false)
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" className="text-muted-foreground opacity-70 hover:opacity-100 data-[state=open]:opacity-100" aria-label={`Organize ${item.name}`}>
-            <MoreHorizontal />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuItem onSelect={() => setItem.mutate({ item, patch: { pinned: !item.pinned } })}>
-            {item.pinned ? <PinOff /> : <Pin />} {item.pinned ? 'Unpin' : 'Pin to top'}
-          </DropdownMenuItem>
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <FolderInput /> Move to group
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-48">
-              {groups.map((g) => (
-                <DropdownMenuItem key={g.id} disabled={g.id === item.groupId} onSelect={() => setItem.mutate({ item, patch: { group_id: g.id, pinned: false } })}>
-                  {g.name}
-                </DropdownMenuItem>
-              ))}
-              {groups.length > 0 && <DropdownMenuSeparator />}
-              <DropdownMenuItem onSelect={() => setCreating(true)}>
-                <FolderPlus /> New group…
-              </DropdownMenuItem>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-          {item.groupId !== null && (
-            <DropdownMenuItem onSelect={() => setItem.mutate({ item, patch: { group_id: null } })}>
-              <FolderMinus /> Remove from group
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
+      <DropdownMenu
+        alignment="end"
+        menuWidth={208}
+        hasChevron={false}
+        renderTrigger={(p) => <IconButton {...p} variant="ghost" size="sm" label={`Organize ${item.name}`} icon={<MoreHorizontal />} className="opacity-70 hover:opacity-100" />}
+      >
+        <DropdownMenuItem
+          icon={item.pinned ? <PinOff /> : <Pin />}
+          label={item.pinned ? 'Unpin' : 'Pin to top'}
+          onClick={() => setItem.mutate({ item, patch: { pinned: !item.pinned } })}
+        />
+        <DropdownMenuSubMenu icon={<FolderInput />} label="Move to group" menuWidth={192}>
+          {groups.map((g) => (
+            <DropdownMenuItem
+              key={g.id}
+              label={g.name}
+              isDisabled={g.id === item.groupId}
+              onClick={() => setItem.mutate({ item, patch: { group_id: g.id, pinned: false } })}
+            />
+          ))}
+          {groups.length > 0 && <DropdownMenuDivider />}
+          <DropdownMenuItem icon={<FolderPlus />} label="New group…" onClick={() => setCreating(true)} />
+        </DropdownMenuSubMenu>
+        {item.groupId !== null && (
+          <DropdownMenuItem icon={<FolderMinus />} label="Remove from group" onClick={() => setItem.mutate({ item, patch: { group_id: null } })} />
+        )}
       </DropdownMenu>
       <GroupNameDialog
         open={creating}
@@ -267,27 +269,17 @@ export function GroupSection({
           </span>
           {problems > 0 && <span className="shrink-0 text-xs text-warning">· {problems} need attention</span>}
         </button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={`Group ${group.name} options`}>
-              <MoreHorizontal />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuItem onSelect={() => setRenaming(true)}>
-              <Pencil /> Rename
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled={index === 0} onSelect={() => move(-1)}>
-              <ArrowUp /> Move up
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled={index === groups.length - 1} onSelect={() => move(1)}>
-              <ArrowDown /> Move down
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(true)}>
-              <Trash2 /> Delete group
-            </DropdownMenuItem>
-          </DropdownMenuContent>
+        <DropdownMenu
+          alignment="end"
+          menuWidth={176}
+          hasChevron={false}
+          renderTrigger={(p) => <IconButton {...p} variant="ghost" size="sm" label={`Group ${group.name} options`} icon={<MoreHorizontal />} />}
+        >
+          <DropdownMenuItem icon={<Pencil />} label="Rename" onClick={() => setRenaming(true)} />
+          <DropdownMenuItem icon={<ArrowUp />} label="Move up" isDisabled={index === 0} onClick={() => move(-1)} />
+          <DropdownMenuItem icon={<ArrowDown />} label="Move down" isDisabled={index === groups.length - 1} onClick={() => move(1)} />
+          <DropdownMenuDivider />
+          <DropdownMenuItem icon={<Trash2 />} label="Delete group" variant="destructive" onClick={() => setDeleting(true)} />
         </DropdownMenu>
       </div>
 

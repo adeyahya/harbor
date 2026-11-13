@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { Activity, Box, Boxes, Container, HardDrive, LayoutGrid, Layers, Moon, Network, PackageOpen, Plus, Settings, Sun } from 'lucide-react'
 import { useTheme } from 'next-themes'
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { CommandPalette } from '@astryxdesign/core/CommandPalette'
+import { createStaticSource, type SearchableItem } from '@astryxdesign/core/Typeahead'
+import { createContext, useContext, useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { api, type DeploymentListItem, type StackListItem } from '@/api'
-import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from '@/components/ui/command'
 import { useCreate } from './CreateDialog'
 import { StatusDot } from './status'
 
@@ -41,68 +42,56 @@ export function CommandMenuProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const run = (fn: () => void) => {
-    setOpen(false)
-    fn()
-  }
+  // Items are rebuilt when data or theme changes; selection dispatches by id.
+  const items = useMemo(() => {
+    const list: CommandItem[] = []
+    const add = (id: string, label: string, group: string, icon: ComponentType, run: () => void, extra: Partial<CommandAux> = {}) =>
+      list.push({ id, label, auxiliaryData: { group, icon, run, ...extra } })
+    for (const s of stacks.data ?? []) add(`s-${s.name}`, s.name, 'Services', Layers, () => navigate(`/stacks/${s.name}`), { status: s.status, keywords: ['stack'] })
+    for (const d of deployments.data ?? [])
+      add(`d-${d.name}`, d.name, 'Services', Box, () => navigate(`/deployments/${d.name}`), { status: d.status, keywords: ['deployment', d.image] })
+    add('create-repo', 'Deploy from GitHub repo', 'Create', Plus, () => create('repo'))
+    add('create-image', 'Deploy a Docker image', 'Create', Plus, () => create('image'))
+    add('create-stack', 'New compose stack', 'Create', Plus, () => create('stack'))
+    for (const p of pages) add(`go-${p.to}`, p.label, 'Go to', p.icon, () => navigate(p.to))
+    const dark = resolvedTheme === 'dark'
+    add('theme', `Switch to ${dark ? 'light' : 'dark'} theme`, 'Preferences', dark ? Sun : Moon, () => setTheme(dark ? 'light' : 'dark'))
+    return list
+  }, [stacks.data, deployments.data, resolvedTheme, navigate, create, setTheme])
+  const source = useMemo(() => createStaticSource(items, { keywords: (item) => item.auxiliaryData?.keywords ?? [] }), [items])
 
   return (
     <CommandContext.Provider value={() => setOpen(true)}>
       {children}
-      <CommandDialog open={open} onOpenChange={setOpen} title="Command menu" description="Search services and pages">
-        <Command>
-        <CommandInput placeholder="Search services, pages and actions…" />
-        <CommandList>
-          <CommandEmpty>No results.</CommandEmpty>
-          {(stacks.data?.length || deployments.data?.length) ? (
-            <CommandGroup heading="Services">
-              {stacks.data?.map((s) => (
-                <CommandItem key={`s-${s.name}`} value={`stack ${s.name}`} onSelect={() => run(() => navigate(`/stacks/${s.name}`))}>
-                  <Layers />
-                  {s.name}
-                  <CommandShortcut>
-                    <StatusDot status={s.status} />
-                  </CommandShortcut>
-                </CommandItem>
-              ))}
-              {deployments.data?.map((d) => (
-                <CommandItem key={`d-${d.name}`} value={`deployment ${d.name} ${d.image}`} onSelect={() => run(() => navigate(`/deployments/${d.name}`))}>
-                  <Box />
-                  {d.name}
-                  <CommandShortcut>
-                    <StatusDot status={d.status} />
-                  </CommandShortcut>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          ) : null}
-          <CommandGroup heading="Create">
-            <CommandItem onSelect={() => run(() => create('repo'))}>
-              <Plus /> Deploy from GitHub repo
-            </CommandItem>
-            <CommandItem onSelect={() => run(() => create('image'))}>
-              <Plus /> Deploy a Docker image
-            </CommandItem>
-            <CommandItem onSelect={() => run(() => create('stack'))}>
-              <Plus /> New compose stack
-            </CommandItem>
-          </CommandGroup>
-          <CommandSeparator />
-          <CommandGroup heading="Go to">
-            {pages.map((p) => (
-              <CommandItem key={p.to} onSelect={() => run(() => navigate(p.to))}>
-                <p.icon /> {p.label}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-          <CommandGroup heading="Preferences">
-            <CommandItem onSelect={() => run(() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark'))}>
-              {resolvedTheme === 'dark' ? <Sun /> : <Moon />} Switch to {resolvedTheme === 'dark' ? 'light' : 'dark'} theme
-            </CommandItem>
-          </CommandGroup>
-        </CommandList>
-        </Command>
-      </CommandDialog>
+      <CommandPalette<CommandItem>
+        isOpen={open}
+        onOpenChange={setOpen}
+        label="Command menu"
+        searchSource={source}
+        value=""
+        onValueChange={(id) => items.find((i) => i.id === id)?.auxiliaryData?.run()}
+        emptySearchText="No results."
+        renderItem={(item) => {
+          const aux = item.auxiliaryData!
+          return (
+            <span className="flex w-full items-center gap-2 [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground">
+              <aux.icon />
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              {aux.status && <StatusDot status={aux.status} />}
+            </span>
+          )
+        }}
+      />
     </CommandContext.Provider>
   )
 }
+
+interface CommandAux {
+  group: string
+  icon: ComponentType
+  run: () => void
+  status?: string
+  keywords?: string[]
+}
+
+type CommandItem = SearchableItem<CommandAux>

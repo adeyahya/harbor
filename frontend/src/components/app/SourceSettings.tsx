@@ -2,13 +2,13 @@ import { Box, Check, ChevronsUp, Copy, Eye, EyeOff, FileCode2, KeyRound, X } fro
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { gitHost, repoLabel, type Deployment, type DeploymentSource, type Stack, type StackSource } from '@/api'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '@astryxdesign/core/Button'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Selector } from '@astryxdesign/core/Selector'
+import { Switch } from '@astryxdesign/core/Switch'
+import { TextArea } from '@astryxdesign/core/TextArea'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { useGitAccounts } from '@/pages/Settings'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { GithubIcon } from './GithubIcon'
 import { SettingsSection } from './panel'
@@ -19,13 +19,43 @@ export type SourceConfig = Pick<
   'source' | 'image' | 'git_url' | 'git_branch' | 'build_context' | 'dockerfile' | 'build_args' | 'auto_deploy' | 'git_account_id' | 'upstream_id'
 >
 
-function Field({ label, hint, children, htmlFor }: { label: string; hint?: ReactNode; children: ReactNode; htmlFor?: string }) {
+/** A labelled read-only value (not a form control), with an optional hint. */
+function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <div className="space-y-2">
-      <Label htmlFor={htmlFor}>{label}</Label>
+      <div className="text-sm font-medium">{label}</div>
       {children}
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
+  )
+}
+
+/** A monospace text field, the shape every path/URL setting here takes. */
+function MonoInput({
+  label,
+  hint,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  hint?: string
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+}) {
+  return (
+    <TextInput
+      label={label}
+      description={hint}
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      controlClassName="font-mono"
+      hasAutoCorrect={false}
+      autoCapitalize="off"
+      width="100%"
+    />
   )
 }
 
@@ -41,13 +71,16 @@ function CopyField({ value, secret = false }: { value: string; secret?: boolean 
     <div className="flex items-center gap-1 rounded-lg border bg-log py-1 pr-1 pl-3">
       <code className="min-w-0 flex-1 truncate font-mono text-[12px]">{shown ? value : '•'.repeat(24)}</code>
       {secret && (
-        <Button type="button" variant="ghost" size="icon-sm" onClick={() => setShown((s) => !s)} title={shown ? 'Hide' : 'Show'}>
-          {shown ? <EyeOff /> : <Eye />}
-        </Button>
+        <IconButton
+          variant="ghost"
+          size="sm"
+          label={shown ? 'Hide' : 'Show'}
+          tooltip={shown ? 'Hide' : 'Show'}
+          icon={shown ? <EyeOff /> : <Eye />}
+          onClick={() => setShown((s) => !s)}
+        />
       )}
-      <Button type="button" variant="ghost" size="icon-sm" onClick={copy} title="Copy">
-        {copied ? <Check className="text-success" /> : <Copy />}
-      </Button>
+      <IconButton variant="ghost" size="sm" label="Copy" tooltip="Copy" icon={copied ? <Check className="text-success" /> : <Copy />} onClick={copy} />
     </div>
   )
 }
@@ -77,9 +110,21 @@ function AccountField({
   const auto = accounts.find((a) => a.host === host)
   const selected = value === null ? 'auto' : value === 0 ? 'none' : String(value)
   return (
-    <Field
-      label="Git account"
-      hint={
+    <div className="space-y-2">
+      <Selector
+        label="Git account"
+        value={selected}
+        onChange={(v) => onChange(v === 'auto' ? null : v === 'none' ? 0 : Number(v))}
+        options={[
+          { value: 'auto', label: `Automatic${auto ? ` (${auto.name})` : ''}` },
+          ...accounts.map((a) => ({ value: String(a.id), label: `${a.name} · ${a.host}` })),
+          { value: 'none', label: 'None (public repository)' },
+        ]}
+        containerClassName="w-full sm:w-80"
+        width="100%"
+      />
+      <p className="text-xs text-muted-foreground">
+        {
         value === null ? (
           auto ? (
             <>
@@ -104,44 +149,25 @@ function AccountField({
             </Link>
             .
           </>
-        )
-      }
-    >
-      <Select value={selected} onValueChange={(v) => onChange(v === 'auto' ? null : v === 'none' ? 0 : Number(v))}>
-        <SelectTrigger className="w-full sm:w-80">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="auto">Automatic{auto ? ` (${auto.name})` : ''}</SelectItem>
-          {accounts.map((a) => (
-            <SelectItem key={a.id} value={String(a.id)}>
-              {a.name} · {a.host}
-            </SelectItem>
-          ))}
-          <SelectItem value="none">None (public repository)</SelectItem>
-        </SelectContent>
-      </Select>
+        )}
+      </p>
       {hasToken && (
         <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
           <KeyRound className="size-3.5" />
           {token === '' ? (
             <>
               <span className="flex-1">This service's own token will be removed on save.</span>
-              <Button type="button" variant="ghost" size="xs" onClick={() => onTokenChange(null)}>
-                Undo
-              </Button>
+              <Button variant="ghost" size="sm" label="Undo" onClick={() => onTokenChange(null)} />
             </>
           ) : (
             <>
               <span className="flex-1">This service has its own token from before git accounts; it's used only when no account applies.</span>
-              <Button type="button" variant="ghost" size="xs" className="text-destructive" onClick={() => onTokenChange('')}>
-                <X /> Remove
-              </Button>
+              <Button variant="destructive" size="sm" icon={<X />} label="Remove" onClick={() => onTokenChange('')} />
             </>
           )}
         </div>
       )}
-    </Field>
+    </div>
   )
 }
 
@@ -194,30 +220,28 @@ export function SourceSettings({
       {config.source === 'promote' ? (
         <UpstreamField selfId={selfId} value={config.upstream_id} onChange={set('upstream_id')} />
       ) : config.source === 'image' ? (
-        <Field label="Image" hint="Untagged images use :latest." htmlFor="src-image">
-          <Input id="src-image" value={config.image} onChange={(e) => set('image')(e.target.value)} placeholder="nginx:alpine" className="font-mono" />
-        </Field>
+        <MonoInput label="Image" hint="Untagged images use :latest." value={config.image} onChange={set('image')} placeholder="nginx:alpine" />
       ) : (
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-[1fr_12rem]">
-            <Field label="Repository" hint="owner/repo for GitHub, or any git URL." htmlFor="src-repo">
-              <Input id="src-repo" value={config.git_url} onChange={(e) => set('git_url')(e.target.value)} placeholder="owner/repo" className="font-mono" />
-            </Field>
-            <Field label="Branch" htmlFor="src-branch">
-              <Input id="src-branch" value={config.git_branch} onChange={(e) => set('git_branch')(e.target.value)} placeholder="Default branch" className="font-mono" />
-            </Field>
+            <MonoInput label="Repository" hint="owner/repo for GitHub, or any git URL." value={config.git_url} onChange={set('git_url')} placeholder="owner/repo" />
+            <MonoInput label="Branch" value={config.git_branch} onChange={set('git_branch')} placeholder="Default branch" />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Root directory" hint="Build context inside the repo." htmlFor="src-context">
-              <Input id="src-context" value={config.build_context} onChange={(e) => set('build_context')(e.target.value)} placeholder="." className="font-mono" />
-            </Field>
-            <Field label="Dockerfile path" hint="Relative to the root directory." htmlFor="src-dockerfile">
-              <Input id="src-dockerfile" value={config.dockerfile} onChange={(e) => set('dockerfile')(e.target.value)} placeholder="Dockerfile" className="font-mono" />
-            </Field>
+            <MonoInput label="Root directory" hint="Build context inside the repo." value={config.build_context} onChange={set('build_context')} placeholder="." />
+            <MonoInput label="Dockerfile path" hint="Relative to the root directory." value={config.dockerfile} onChange={set('dockerfile')} placeholder="Dockerfile" />
           </div>
-          <Field label="Build arguments" hint={<>One <code>KEY=value</code> per line, passed as <code>--build-arg</code>.</>} htmlFor="src-args">
-            <Textarea id="src-args" value={config.build_args} onChange={(e) => set('build_args')(e.target.value)} rows={3} placeholder="NODE_ENV=production" className="font-mono text-[12.5px]" />
-          </Field>
+          <TextArea
+            label="Build arguments"
+            description="One KEY=value per line, passed as --build-arg."
+            value={config.build_args}
+            onChange={set('build_args')}
+            rows={3}
+            placeholder="NODE_ENV=production"
+            controlClassName="font-mono text-[12.5px]"
+            hasSpellCheck={false}
+            width="100%"
+          />
           <AccountField
             url={config.git_url}
             value={config.git_account_id}
@@ -252,13 +276,15 @@ export function AutoDeploySettings({
   const local = /^(localhost|127\.|\[::1\])/.test(window.location.hostname)
   return (
     <SettingsSection title="Deploy on push" description={`Redeploy when ${repoLabel(repo) || 'the repo'} gets new commits on ${branch || 'its default branch'}.`}>
-      <label className="flex cursor-pointer items-start justify-between gap-4">
-        <span>
-          <span className="block text-sm font-medium">Auto-deploy</span>
-          <span className="block text-xs text-muted-foreground">Harbor checks the branch for new commits about once a minute. Add the webhook below for instant deploys.</span>
-        </span>
-        <Switch checked={enabled} onCheckedChange={onEnabledChange} />
-      </label>
+      <Switch
+        label="Auto-deploy"
+        description="Harbor checks the branch for new commits about once a minute. Add the webhook below for instant deploys."
+        value={enabled}
+        onChange={onEnabledChange}
+        labelPosition="start"
+        labelSpacing="spread"
+        width="100%"
+      />
       {enabled && (
         <div className="mt-4 space-y-3 border-t pt-4">
           <p className="text-sm">
@@ -323,30 +349,21 @@ export function StackSourceSettings({
         {config.source === 'git' && (
           <>
             <div className="grid gap-4 sm:grid-cols-[1fr_12rem]">
-              <Field label="Repository" hint="owner/repo for GitHub, or any git URL." htmlFor="st-repo">
-                <Input id="st-repo" value={config.git_url} onChange={(e) => set('git_url')(e.target.value)} placeholder="owner/repo" className="font-mono" />
-              </Field>
-              <Field label="Branch" htmlFor="st-branch">
-                <Input id="st-branch" value={config.git_branch} onChange={(e) => set('git_branch')(e.target.value)} placeholder="Default branch" className="font-mono" />
-              </Field>
+              <MonoInput label="Repository" hint="owner/repo for GitHub, or any git URL." value={config.git_url} onChange={set('git_url')} placeholder="owner/repo" />
+              <MonoInput label="Branch" value={config.git_branch} onChange={set('git_branch')} placeholder="Default branch" />
             </div>
-            <Field label="Compose file" hint="Path inside the repository. Relative paths in it resolve against its folder." htmlFor="st-path">
-              <Input id="st-path" value={config.compose_path} onChange={(e) => set('compose_path')(e.target.value)} placeholder="compose.yaml" className="font-mono" />
-            </Field>
-            <Field
+            <MonoInput label="Compose file" hint="Path inside the repository. Relative paths in it resolve against its folder." value={config.compose_path} onChange={set('compose_path')} placeholder="compose.yaml" />
+            <TextArea
               label="Additional compose files"
-              hint="One path per line, applied in order on top of the compose file, like docker compose -f compose.yaml -f override.yaml. Use it for override files that add devices or hardware acceleration. Services with a build: section are rebuilt on every deploy."
-              htmlFor="st-overrides"
-            >
-              <Textarea
-                id="st-overrides"
-                value={config.compose_overrides}
-                onChange={(e) => set('compose_overrides')(e.target.value)}
-                placeholder="docker-compose.gpu.yml"
-                className="min-h-16 font-mono"
-                rows={2}
-              />
-            </Field>
+              description="One path per line, applied in order on top of the compose file, like docker compose -f compose.yaml -f override.yaml. Use it for override files that add devices or hardware acceleration. Services with a build: section are rebuilt on every deploy."
+              value={config.compose_overrides}
+              onChange={set('compose_overrides')}
+              placeholder="docker-compose.gpu.yml"
+              controlClassName="font-mono"
+              hasSpellCheck={false}
+              rows={2}
+              width="100%"
+            />
             <AccountField
               url={config.git_url}
               value={config.git_account_id}
@@ -357,17 +374,17 @@ export function StackSourceSettings({
             />
           </>
         )}
-        <Field
+        <MonoInput
           label={config.source === 'git' ? 'Checkout directory' : 'Project directory'}
           hint={
             config.source === 'git'
               ? 'Where the repository is checked out on the host. Empty uses Harbor\'s data folder. Deploys update it in place: local edits to tracked files are discarded, other files (like data folders) are kept.'
               : 'Relative paths in the compose file resolve against this directory. Empty uses Harbor\'s data folder. Imported stacks keep their original directory.'
           }
-          htmlFor="st-dir"
-        >
-          <Input id="st-dir" value={config.project_dir} onChange={(e) => set('project_dir')(e.target.value)} placeholder="(Harbor's data folder)" className="font-mono" />
-        </Field>
+          value={config.project_dir}
+          onChange={set('project_dir')}
+          placeholder="(Harbor's data folder)"
+        />
       </div>
     </SettingsSection>
   )

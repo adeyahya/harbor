@@ -1,22 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArchiveRestore, CalendarClock, ChevronDown, Cloud, DatabaseBackup, ExternalLink, FolderOpen, Pencil, Play, Plug, Plus, Server, Trash2 } from 'lucide-react'
+import { ArchiveRestore, CalendarClock, Cloud, DatabaseBackup, ExternalLink, FolderOpen, Pencil, Play, Plug, Plus, Server, Trash2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
-import { Link, useSearchParams } from 'react-router'
-import { toast } from 'sonner'
+import { useSearchParams } from 'react-router'
 import { api, type Backup, type BackupDestination, type BackupDestinationKind, type BackupJob, type SchedulePreview } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { EmptyState, ErrorAlert, Loading, Surface } from '@/components/app/page'
 import { UpdateStatus } from '@/components/app/status'
 import { useOpenUpdate, useRunAction } from '@/components/app/updates'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
+import { Button } from '@astryxdesign/core/Button'
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
+import { DropdownMenu, DropdownMenuGroup, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { NumberInput } from '@astryxdesign/core/NumberInput'
+import { Selector } from '@astryxdesign/core/Selector'
+import { Switch } from '@astryxdesign/core/Switch'
+import { TextArea } from '@astryxdesign/core/TextArea'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { bytes, timeAgo } from '@/lib/format'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 
 const KINDS: { kind: BackupDestinationKind; label: string; icon: ReactNode; blurb: string }[] = [
@@ -99,16 +100,14 @@ export function BackupDestinationsSection() {
           <h2 className="font-semibold">Backup destinations</h2>
           <p className="mt-0.5 text-sm text-muted-foreground">Where volume backups are uploaded. Schedule backups from a volume's Backups tab.</p>
         </div>
-        <Button size="sm" onClick={() => setEditing('new')}>
-          <Plus /> Add destination
-        </Button>
+        <Button size="sm" variant="primary" icon={<Plus />} label="Add destination" onClick={() => setEditing('new')} />
       </div>
       <ErrorAlert error={error} className="mb-3" />
       <Surface>
         {isLoading ? (
           <Loading />
         ) : !data?.length ? (
-          <EmptyState icon={<DatabaseBackup />} title="No backup destinations" action={<Button onClick={() => setEditing('new')}>Add a destination</Button>}>
+          <EmptyState icon={<DatabaseBackup />} title="No backup destinations" action={<Button variant="primary" label="Add a destination" onClick={() => setEditing('new')} />}>
             Add Google Drive, a local folder or an rclone remote, then schedule backups of your volumes.
           </EmptyState>
         ) : (
@@ -121,38 +120,42 @@ export function BackupDestinationsSection() {
                   <div className="truncate text-xs text-muted-foreground">{destinationSummary(d)}</div>
                 </div>
                 {d.kind === 'gdrive' && (
-                  <Button variant={d.connected ? 'ghost' : 'default'} size="sm" onClick={() => setConnecting(d)}>
-                    <Plug /> {d.connected ? 'Reconnect' : 'Connect'}
-                  </Button>
+                  <Button variant={d.connected ? 'ghost' : 'primary'} size="sm" icon={<Plug />} label={d.connected ? 'Reconnect' : 'Connect'} onClick={() => setConnecting(d)} />
                 )}
-                <Button variant="outline" size="sm" disabled={!d.connected || (test.isPending && test.variables === d.id)} onClick={() => test.mutate(d.id)}>
-                  {test.isPending && test.variables === d.id ? 'Testing…' : 'Test'}
-                </Button>
-                <Button variant="ghost" size="icon-sm" onClick={() => setEditing(d)} aria-label={`Edit ${d.name}`}>
-                  <Pencil />
-                </Button>
-                <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => setDeleting(d)} aria-label={`Remove ${d.name}`}>
-                  <Trash2 />
-                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  label="Test"
+                  isLoading={test.isPending && test.variables === d.id}
+                  isDisabled={!d.connected}
+                  onClick={() => test.mutate(d.id)}
+                />
+                <IconButton variant="ghost" size="sm" icon={<Pencil />} label={`Edit ${d.name}`} onClick={() => setEditing(d)} />
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-destructive"
+                  icon={<Trash2 />}
+                  label={`Remove ${d.name}`}
+                  onClick={() => setDeleting(d)}
+                />
               </div>
             ))}
           </div>
         )}
       </Surface>
-      <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className="gap-0 p-0 sm:max-w-lg">
-          {editing !== null && (
-            <DestinationForm
-              key={editing === 'new' ? 'new' : editing.id}
-              destination={editing === 'new' ? null : editing}
-              onClose={() => setEditing(null)}
-              onCreated={(d) => d.kind === 'gdrive' && setConnecting(d)}
-            />
-          )}
-        </DialogContent>
+      <Dialog isOpen={editing !== null} onOpenChange={(o) => !o && setEditing(null)} width={512} maxHeight="90vh" purpose="form" padding={0}>
+        {editing !== null && (
+          <DestinationForm
+            key={editing === 'new' ? 'new' : editing.id}
+            destination={editing === 'new' ? null : editing}
+            onClose={() => setEditing(null)}
+            onCreated={(d) => d.kind === 'gdrive' && setConnecting(d)}
+          />
+        )}
       </Dialog>
-      <Dialog open={connecting !== null} onOpenChange={(o) => !o && setConnecting(null)}>
-        <DialogContent className="gap-0 p-0 sm:max-w-lg">{connecting && <GoogleConnect key={connecting.id} destination={connecting} onClose={() => setConnecting(null)} />}</DialogContent>
+      <Dialog isOpen={connecting !== null} onOpenChange={(o) => !o && setConnecting(null)} width={512} purpose="form" padding={0}>
+        {connecting && <GoogleConnect key={connecting.id} destination={connecting} onClose={() => setConnecting(null)} />}
       </Dialog>
       <Confirm
         open={deleting !== null}
@@ -166,14 +169,9 @@ export function BackupDestinationsSection() {
   )
 }
 
-function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <Label htmlFor={id}>{label}</Label>
-      {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  )
+/** Helper text under a control whose hint needs markup (Astryx descriptions are plain strings). */
+function Hint({ children }: { children: ReactNode }) {
+  return <p className="mt-1.5 text-xs text-muted-foreground">{children}</p>
 }
 
 function DestinationForm({ destination, onClose, onCreated }: { destination: BackupDestination | null; onClose: () => void; onCreated: (d: BackupDestination) => void }) {
@@ -215,10 +213,12 @@ function DestinationForm({ destination, onClose, onCreated }: { destination: Bac
         save.mutate()
       }}
     >
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle>{destination ? `Edit ${destination.name}` : 'Add backup destination'}</DialogTitle>
-        <DialogDescription>{kindMeta(kind)?.blurb}</DialogDescription>
-      </DialogHeader>
+      <DialogHeader
+        className="border-b px-5 py-4"
+        title={destination ? `Edit ${destination.name}` : 'Add backup destination'}
+        subtitle={kindMeta(kind)?.blurb}
+        onOpenChange={(o) => !o && onClose()}
+      />
       <div className="scrollbar-thin max-h-[70vh] space-y-4 overflow-y-auto px-5 py-4">
         {!destination && (
           <div className="grid grid-cols-3 gap-2">
@@ -238,80 +238,94 @@ function DestinationForm({ destination, onClose, onCreated }: { destination: Bac
             ))}
           </div>
         )}
-        <Field id="dest-name" label="Name">
-          <Input id="dest-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={kindMeta(kind)?.label} />
-        </Field>
+        <TextInput label="Name" value={name} onChange={setName} placeholder={kindMeta(kind)?.label} width="100%" />
 
         {kind === 'local' && (
-          <Field
-            id="dest-path"
+          <TextInput
             label="Folder"
-            hint="An absolute path as Harbor sees it. When Harbor runs in Docker, use a folder under its data directory or one you mount into its container."
-          >
-            <Input id="dest-path" value={path} onChange={(e) => setPath(e.target.value)} className="font-mono" required />
-          </Field>
+            value={path}
+            onChange={setPath}
+            description="An absolute path as Harbor sees it. When Harbor runs in Docker, use a folder under its data directory or one you mount into its container."
+            controlClassName="font-mono"
+            isRequired
+            width="100%"
+          />
         )}
 
         {kind === 'gdrive' && (
           <>
             <GoogleSetupSteps />
-            <Field id="dest-client" label="OAuth client ID">
-              <Input id="dest-client" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="1234-abc.apps.googleusercontent.com" className="font-mono" required />
-            </Field>
-            <Field id="dest-secret" label="OAuth client secret" hint="Stored on the server and never shown again.">
-              <Input
-                id="dest-secret"
-                type="password"
-                autoComplete="off"
-                value={clientSecret}
-                onChange={(e) => setClientSecret(e.target.value)}
-                placeholder={destination?.has_client_secret ? 'Leave empty to keep the saved secret' : 'GOCSPX-…'}
-                className="font-mono"
-                required={!destination?.has_client_secret}
-              />
-            </Field>
-            <Field id="dest-folder" label="Drive folder" hint="Created in the root of your Drive if it doesn't exist.">
-              <Input id="dest-folder" value={folder} onChange={(e) => setFolder(e.target.value)} />
-            </Field>
+            <TextInput
+              label="OAuth client ID"
+              value={clientId}
+              onChange={setClientId}
+              placeholder="1234-abc.apps.googleusercontent.com"
+              controlClassName="font-mono"
+              isRequired
+              width="100%"
+            />
+            <TextInput
+              label="OAuth client secret"
+              type="password"
+              autoComplete="off"
+              value={clientSecret}
+              onChange={setClientSecret}
+              placeholder={destination?.has_client_secret ? 'Leave empty to keep the saved secret' : 'GOCSPX-…'}
+              description="Stored on the server and never shown again."
+              controlClassName="font-mono"
+              isRequired={!destination?.has_client_secret}
+              width="100%"
+            />
+            <TextInput label="Drive folder" value={folder} onChange={setFolder} description="Created in the root of your Drive if it doesn't exist." width="100%" />
           </>
         )}
 
         {kind === 'rclone' && (
           <>
-            <Field
-              id="dest-rclone"
-              label="rclone config"
-              hint={
-                <>
-                  One or more remotes in rclone.conf format, e.g. the output of <code className="font-mono">rclone config show myremote</code>.{' '}
-                  {destination?.has_rclone_config && 'Leave empty to keep the saved config.'}
-                </>
-              }
-            >
-              <Textarea
-                id="dest-rclone"
+            <div>
+              <TextArea
+                label="rclone config"
                 value={rcloneConfig}
-                onChange={(e) => setRcloneConfig(e.target.value)}
+                onChange={setRcloneConfig}
                 rows={7}
-                className="font-mono text-xs"
+                controlClassName="font-mono text-xs"
                 placeholder={'[b2]\ntype = b2\naccount = …\nkey = …'}
-                required={!destination?.has_rclone_config}
+                hasSpellCheck={false}
+                isRequired={!destination?.has_rclone_config}
+                width="100%"
               />
-            </Field>
-            <Field id="dest-remote" label="Remote path" hint="Backups go here: the remote's name from the config, a colon, then a bucket or folder.">
-              <Input id="dest-remote" value={remote} onChange={(e) => setRemote(e.target.value)} placeholder="b2:my-bucket/harbor" className="font-mono" required />
-            </Field>
+              <Hint>
+                One or more remotes in rclone.conf format, e.g. the output of <code className="font-mono">rclone config show myremote</code>.{' '}
+                {destination?.has_rclone_config && 'Leave empty to keep the saved config.'}
+              </Hint>
+            </div>
+            <TextInput
+              label="Remote path"
+              value={remote}
+              onChange={setRemote}
+              placeholder="b2:my-bucket/harbor"
+              description="Backups go here: the remote's name from the config, a colon, then a bucket or folder."
+              controlClassName="font-mono"
+              isRequired
+              width="100%"
+            />
           </>
         )}
         <ErrorAlert error={save.error} />
       </div>
       <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={save.isPending}>
-          {destination ? 'Save' : kind === 'gdrive' ? 'Add and connect' : 'Add destination'}
-        </Button>
+        <Button variant="ghost" label="Cancel" onClick={onClose} />
+        <Button
+          type="submit"
+          variant="primary"
+          label={destination ? 'Save' : kind === 'gdrive' ? 'Add and connect' : 'Add destination'}
+          isLoading={save.isPending}
+          isDisabled={
+            (kind === 'local' && !path.trim()) ||
+            (kind === 'gdrive' && (!clientId.trim() || (!destination?.has_client_secret && !clientSecret))) ||
+            (kind === 'rclone' && (!remote.trim() || (!destination?.has_rclone_config && !rcloneConfig.trim())))
+          }
+        />
       </div>
     </form>
   )
@@ -396,10 +410,12 @@ function GoogleConnect({ destination, onClose }: { destination: BackupDestinatio
 
   return (
     <div>
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle>Connect {destination.name} to Google Drive</DialogTitle>
-        <DialogDescription>Sign in with the Google account whose Drive should hold the backups. Harbor can only see the files it uploads.</DialogDescription>
-      </DialogHeader>
+      <DialogHeader
+        className="border-b px-5 py-4"
+        title={`Connect ${destination.name} to Google Drive`}
+        subtitle="Sign in with the Google account whose Drive should hold the backups. Harbor can only see the files it uploads."
+        onOpenChange={(o) => !o && onClose()}
+      />
       <div className="space-y-4 px-5 py-4 text-sm">
         <div className="grid grid-cols-2 gap-2">
           {(
@@ -420,28 +436,25 @@ function GoogleConnect({ destination, onClose }: { destination: BackupDestinatio
           ))}
         </div>
         {mode === 'paste' && started && (
-          <Field
-            id="google-code"
+          <TextInput
             label="Address you landed on"
-            hint="After you allow access, Google opens http://localhost/?…&code=… which won't load. Copy that whole address from the address bar and paste it here."
-          >
-            <Input id="google-code" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="http://localhost/?state=…&code=…" className="font-mono" autoFocus />
-          </Field>
+            value={pasted}
+            onChange={setPasted}
+            description="After you allow access, Google opens http://localhost/?…&code=… which won't load. Copy that whole address from the address bar and paste it here."
+            placeholder="http://localhost/?state=…&code=…"
+            controlClassName="font-mono"
+            hasAutoFocus
+            width="100%"
+          />
         )}
         <ErrorAlert error={authorize.error ?? finish.error} />
       </div>
       <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
+        <Button variant="ghost" label="Cancel" onClick={onClose} />
         {mode === 'paste' && started ? (
-          <Button onClick={() => finish.mutate()} disabled={!pasted.trim() || finish.isPending}>
-            Connect
-          </Button>
+          <Button variant="primary" label="Connect" isLoading={finish.isPending} isDisabled={!pasted.trim()} onClick={() => finish.mutate()} />
         ) : (
-          <Button onClick={() => authorize.mutate()} disabled={authorize.isPending}>
-            <ExternalLink /> Sign in with Google
-          </Button>
+          <Button variant="primary" icon={<ExternalLink />} label="Sign in with Google" isLoading={authorize.isPending} onClick={() => authorize.mutate()} />
         )}
       </div>
     </div>
@@ -509,11 +522,7 @@ export function VolumeBackups({ volume }: { volume: string }) {
         <EmptyState
           icon={<DatabaseBackup />}
           title="No backup destinations yet"
-          action={
-            <Button asChild>
-              <Link to="/settings#backups">Add one in Settings</Link>
-            </Button>
-          }
+          action={<Button variant="primary" label="Add one in Settings" href="/settings#backups" />}
         >
           Back up this volume to Google Drive, a local folder or any rclone remote on a schedule.
         </EmptyState>
@@ -530,25 +539,19 @@ export function VolumeBackups({ volume }: { volume: string }) {
             <p className="text-xs text-muted-foreground">Backups run automatically and older ones are deleted beyond the number kept.</p>
           </div>
           <div className="flex gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" disabled={!usable.length}>
-                  Back up now <ChevronDown />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel className="text-xs text-muted-foreground">One-off backup to…</DropdownMenuLabel>
-                <DropdownMenuSeparator />
+            <DropdownMenu button={{ label: 'Back up now', variant: 'secondary', size: 'sm', isDisabled: !usable.length }} alignment="end">
+              <DropdownMenuGroup title="One-off backup to…">
                 {usable.map((d) => (
-                  <DropdownMenuItem key={d.id} onSelect={() => backUp(`/backups/volumes/${encodeURIComponent(volume)}/run`, { destination_id: d.id })}>
-                    {kindMeta(d.kind)?.icon} {d.name}
-                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    key={d.id}
+                    icon={kindMeta(d.kind)?.icon}
+                    label={d.name}
+                    onClick={() => backUp(`/backups/volumes/${encodeURIComponent(volume)}/run`, { destination_id: d.id })}
+                  />
                 ))}
-              </DropdownMenuContent>
+              </DropdownMenuGroup>
             </DropdownMenu>
-            <Button size="sm" onClick={() => setEditing('new')} disabled={!usable.length}>
-              <Plus /> Add schedule
-            </Button>
+            <Button size="sm" variant="primary" icon={<Plus />} label="Add schedule" isDisabled={!usable.length} onClick={() => setEditing('new')} />
           </div>
         </div>
         {!usable.length && <ErrorAlert error="None of your backup destinations is connected yet. Finish connecting one in Settings." className="mb-2" />}
@@ -580,16 +583,17 @@ export function VolumeBackups({ volume }: { volume: string }) {
                       )}
                     </div>
                   </div>
-                  <Switch checked={j.enabled} onCheckedChange={() => toggle.mutate(j)} aria-label={j.enabled ? 'Pause schedule' : 'Resume schedule'} />
-                  <Button variant="ghost" size="icon-sm" title="Run now" aria-label="Run now" onClick={() => backUp(`/backups/jobs/${j.id}/run`)}>
-                    <Play />
-                  </Button>
-                  <Button variant="ghost" size="icon-sm" onClick={() => setEditing(j)} aria-label="Edit schedule">
-                    <Pencil />
-                  </Button>
-                  <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => setDeletingJob(j)} aria-label="Delete schedule">
-                    <Trash2 />
-                  </Button>
+                  <Switch label={j.enabled ? 'Pause schedule' : 'Resume schedule'} isLabelHidden value={j.enabled} onChange={() => toggle.mutate(j)} />
+                  <IconButton variant="ghost" size="sm" icon={<Play />} label="Run now" tooltip="Run now" onClick={() => backUp(`/backups/jobs/${j.id}/run`)} />
+                  <IconButton variant="ghost" size="sm" icon={<Pencil />} label="Edit schedule" onClick={() => setEditing(j)} />
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-destructive"
+                    icon={<Trash2 />}
+                    label="Delete schedule"
+                    onClick={() => setDeletingJob(j)}
+                  />
                 </div>
               ))}
             </div>
@@ -618,12 +622,15 @@ export function VolumeBackups({ volume }: { volume: string }) {
                       {!b.job_id && ' · one-off'}
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" disabled={!b.destination_id} onClick={() => setRestoring(b)}>
-                    <ArchiveRestore /> Restore
-                  </Button>
-                  <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => setDeleting(b)} aria-label={`Delete ${b.file_name}`}>
-                    <Trash2 />
-                  </Button>
+                  <Button variant="secondary" size="sm" icon={<ArchiveRestore />} label="Restore" isDisabled={!b.destination_id} onClick={() => setRestoring(b)} />
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-destructive"
+                    icon={<Trash2 />}
+                    label={`Delete ${b.file_name}`}
+                    onClick={() => setDeleting(b)}
+                  />
                 </div>
               ))}
             </div>
@@ -631,26 +638,22 @@ export function VolumeBackups({ volume }: { volume: string }) {
         </Surface>
       </section>
 
-      <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className="gap-0 p-0 sm:max-w-md">
-          {editing !== null && (
-            <JobForm key={editing === 'new' ? 'new' : editing.id} volume={volume} job={editing === 'new' ? null : editing} destinations={usable} onClose={() => setEditing(null)} />
-          )}
-        </DialogContent>
+      <Dialog isOpen={editing !== null} onOpenChange={(o) => !o && setEditing(null)} width={448} maxHeight="90vh" purpose="form" padding={0}>
+        {editing !== null && (
+          <JobForm key={editing === 'new' ? 'new' : editing.id} volume={volume} job={editing === 'new' ? null : editing} destinations={usable} onClose={() => setEditing(null)} />
+        )}
       </Dialog>
-      <Dialog open={restoring !== null} onOpenChange={(o) => !o && setRestoring(null)}>
-        <DialogContent className="gap-0 p-0 sm:max-w-md">
-          {restoring && (
-            <RestoreForm
-              backup={restoring}
-              onClose={() => setRestoring(null)}
-              onStart={(body) => {
-                setRestoring(null)
-                backUp(`/backups/${restoring.id}/restore`, body)
-              }}
-            />
-          )}
-        </DialogContent>
+      <Dialog isOpen={restoring !== null} onOpenChange={(o) => !o && setRestoring(null)} width={448} purpose="form" padding={0}>
+        {restoring && (
+          <RestoreForm
+            backup={restoring}
+            onClose={() => setRestoring(null)}
+            onStart={(body) => {
+              setRestoring(null)
+              backUp(`/backups/${restoring.id}/restore`, body)
+            }}
+          />
+        )}
       </Dialog>
       <Confirm
         open={deletingJob !== null}
@@ -676,7 +679,7 @@ function JobForm({ volume, job, destinations, onClose }: { volume: string; job: 
   const qc = useQueryClient()
   const [destination, setDestination] = useState(String(job?.destination_id ?? destinations[0]?.id ?? ''))
   const [schedule, setSchedule] = useState(job?.schedule ?? '0 3 * * *')
-  const [keep, setKeep] = useState(String(job?.keep ?? 7))
+  const [keep, setKeep] = useState(job?.keep ?? 7)
   const [stop, setStop] = useState(job?.stop_containers ?? false)
   const preview = useQuery({
     queryKey: ['backup-schedule', schedule.trim()],
@@ -686,7 +689,7 @@ function JobForm({ volume, job, destinations, onClose }: { volume: string; job: 
   })
   const save = useMutation({
     mutationFn: () => {
-      const body = { volume, destination_id: Number(destination), schedule, keep: Number(keep), stop_containers: stop, enabled: job?.enabled ?? true }
+      const body = { volume, destination_id: Number(destination), schedule, keep, stop_containers: stop, enabled: job?.enabled ?? true }
       return job ? api.put<BackupJob>(`/backups/jobs/${job.id}`, body) : api.post<BackupJob>('/backups/jobs', body)
     },
     onSuccess: () => {
@@ -704,32 +707,40 @@ function JobForm({ volume, job, destinations, onClose }: { volume: string; job: 
         save.mutate()
       }}
     >
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle>{job ? 'Edit backup schedule' : 'Schedule backups'}</DialogTitle>
-        <DialogDescription>
-          Back up <span className="font-mono">{volume}</span> as a .tar.gz archive.
-        </DialogDescription>
-      </DialogHeader>
+      <DialogHeader
+        className="border-b px-5 py-4"
+        title={job ? 'Edit backup schedule' : 'Schedule backups'}
+        subtitle={
+          <>
+            Back up <span className="font-mono">{volume}</span> as a .tar.gz archive.
+          </>
+        }
+        onOpenChange={(o) => !o && onClose()}
+      />
       <div className="space-y-4 px-5 py-4">
-        <Field id="job-dest" label="Destination">
-          <Select value={destination} onValueChange={setDestination}>
-            <SelectTrigger id="job-dest" className="w-full">
-              <SelectValue placeholder="Choose a destination" />
-            </SelectTrigger>
-            <SelectContent>
-              {destinations.map((d) => (
-                <SelectItem key={d.id} value={String(d.id)}>
-                  {d.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <Field
-          id="job-cron"
-          label="When"
-          hint={
-            preview.error ? (
+        <Selector
+          label="Destination"
+          placeholder="Choose a destination"
+          value={destination}
+          onChange={setDestination}
+          options={destinations.map((d) => ({ value: String(d.id), label: d.name }))}
+          width="100%"
+        />
+        <div>
+          <div className="flex items-end gap-2">
+            <Selector
+              label="When"
+              value={preset}
+              onChange={(v) => v !== 'custom' && setSchedule(v)}
+              options={[...PRESETS.map((p) => ({ value: p.cron, label: p.label })), { value: 'custom', label: 'Custom' }]}
+              width={208}
+            />
+            <div className="min-w-0 flex-1">
+              <TextInput label="Cron expression" isLabelHidden value={schedule} onChange={setSchedule} controlClassName="font-mono" isRequired width="100%" />
+            </div>
+          </div>
+          <Hint>
+            {preview.error ? (
               <span className="text-destructive">{preview.error.message}</span>
             ) : preview.data ? (
               <>
@@ -737,47 +748,32 @@ function JobForm({ volume, job, destinations, onClose }: { volume: string; job: 
               </>
             ) : (
               'Cron format: minute hour day month weekday.'
-            )
-          }
-        >
-          <div className="flex gap-2">
-            <Select value={preset} onValueChange={(v) => v !== 'custom' && setSchedule(v)}>
-              <SelectTrigger className="w-52 shrink-0">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PRESETS.map((p) => (
-                  <SelectItem key={p.cron} value={p.cron}>
-                    {p.label}
-                  </SelectItem>
-                ))}
-                <SelectItem value="custom">Custom</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input id="job-cron" value={schedule} onChange={(e) => setSchedule(e.target.value)} className="font-mono" required />
-          </div>
-        </Field>
-        <Field id="job-keep" label="Backups to keep" hint="Older backups from this schedule are deleted after each run. 0 keeps all of them.">
-          <Input id="job-keep" type="number" min={0} max={1000} value={keep} onChange={(e) => setKeep(e.target.value)} className="w-28" required />
-        </Field>
-        <label className="flex items-start gap-3 rounded-lg border px-3 py-2.5">
-          <Switch checked={stop} onCheckedChange={setStop} className="mt-0.5" />
-          <span>
-            <span className="block text-sm font-medium">Stop containers while archiving</span>
-            <span className="block text-xs text-muted-foreground">
-              Recommended for databases: copying files while they're written can give an inconsistent backup. Containers using the volume are started again right after.
-            </span>
-          </span>
-        </label>
+            )}
+          </Hint>
+        </div>
+        <NumberInput
+          label="Backups to keep"
+          description="Older backups from this schedule are deleted after each run. 0 keeps all of them."
+          min={0}
+          max={1000}
+          value={keep}
+          onChange={setKeep}
+          isRequired
+          width={112}
+        />
+        <div className="rounded-lg border px-3 py-2.5">
+          <Switch
+            label="Stop containers while archiving"
+            description="Recommended for databases: copying files while they're written can give an inconsistent backup. Containers using the volume are started again right after."
+            value={stop}
+            onChange={setStop}
+          />
+        </div>
         <ErrorAlert error={save.error} />
       </div>
       <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={save.isPending || !destination}>
-          {job ? 'Save' : 'Schedule'}
-        </Button>
+        <Button variant="ghost" label="Cancel" onClick={onClose} />
+        <Button type="submit" variant="primary" label={job ? 'Save' : 'Schedule'} isLoading={save.isPending} isDisabled={!destination || !schedule.trim()} />
       </div>
     </form>
   )
@@ -794,34 +790,47 @@ function RestoreForm({ backup, onClose, onStart }: { backup: Backup; onClose: ()
         onStart({ volume: volume.trim(), stop_containers: stop })
       }}
     >
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle>Restore backup</DialogTitle>
-        <DialogDescription>
-          <span className="font-mono">{backup.file_name}</span> from {backup.destination_name}, {timeAgo(backup.created_at)}.
-        </DialogDescription>
-      </DialogHeader>
+      <DialogHeader
+        className="border-b px-5 py-4"
+        title="Restore backup"
+        subtitle={
+          <>
+            <span className="font-mono">{backup.file_name}</span> from {backup.destination_name}, {timeAgo(backup.created_at)}.
+          </>
+        }
+        onOpenChange={(o) => !o && onClose()}
+      />
       <div className="space-y-4 px-5 py-4">
-        <Field id="restore-volume" label="Into volume" hint="Restore into a new volume to inspect a backup without touching the original. It's created if it doesn't exist.">
-          <Input id="restore-volume" value={volume} onChange={(e) => setVolume(e.target.value)} className="font-mono" required />
-        </Field>
-        <label className="flex items-start gap-3 rounded-lg border px-3 py-2.5">
-          <Switch checked={stop} onCheckedChange={setStop} className="mt-0.5" />
-          <span>
-            <span className="block text-sm font-medium">Stop containers while restoring</span>
-            <span className="block text-xs text-muted-foreground">Containers using the volume are stopped, then started again once the files are in place.</span>
-          </span>
-        </label>
+        <TextInput
+          label="Into volume"
+          value={volume}
+          onChange={setVolume}
+          description="Restore into a new volume to inspect a backup without touching the original. It's created if it doesn't exist."
+          controlClassName="font-mono"
+          isRequired
+          width="100%"
+        />
+        <div className="rounded-lg border px-3 py-2.5">
+          <Switch
+            label="Stop containers while restoring"
+            description="Containers using the volume are stopped, then started again once the files are in place."
+            value={stop}
+            onChange={setStop}
+          />
+        </div>
         {inPlace && (
           <ErrorAlert error={`Everything currently in ${backup.volume} is replaced with the backup's contents. The archive is checked first, so a damaged backup leaves the volume as it is.`} />
         )}
       </div>
       <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" variant={inPlace ? 'destructive' : 'default'}>
-          <ArchiveRestore /> {inPlace ? 'Replace and restore' : 'Restore'}
-        </Button>
+        <Button variant="ghost" label="Cancel" onClick={onClose} />
+        <Button
+          type="submit"
+          variant={inPlace ? 'destructive' : 'primary'}
+          icon={<ArchiveRestore />}
+          label={inPlace ? 'Replace and restore' : 'Restore'}
+          isDisabled={!volume.trim()}
+        />
       </div>
     </form>
   )

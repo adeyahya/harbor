@@ -1,14 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ChevronRight, Download, File, FileText, Folder, HardDrive, Image as ImageIcon, Link2, Lock, Search } from 'lucide-react'
-import { useState } from 'react'
+import { useState, type ComponentProps } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { api, type VolumeDetail, type VolumeEntry, type VolumeFilePreview, type VolumeListing } from '@/api'
 import { VolumeBackups } from '@/components/app/backups'
 import { EmptyState, ErrorAlert, Loading } from '@/components/app/page'
 import { ServicePanel, usePanelTab } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
-import { Button } from '@/components/ui/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Button } from '@astryxdesign/core/Button'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow } from '@astryxdesign/core/Table'
 import { bytes, timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -175,14 +176,14 @@ function Explorer({ volume }: { volume: string }) {
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border bg-card">
-          <Table>
+          <Table hasHover>
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-4">Name</TableHead>
-                <TableHead className="w-24 text-right">Size</TableHead>
-                <TableHead className="hidden w-32 sm:table-cell">Modified</TableHead>
-                <TableHead className="hidden w-28 md:table-cell">Permissions</TableHead>
-                <TableHead className="w-10" />
+              <TableRow isHeaderRow>
+                <TableHeaderCell className="pl-4">Name</TableHeaderCell>
+                <TableHeaderCell className="w-24 text-right">Size</TableHeaderCell>
+                <TableHeaderCell className="hidden w-32 sm:table-cell">Modified</TableHeaderCell>
+                <TableHeaderCell className="hidden w-28 md:table-cell">Permissions</TableHeaderCell>
+                <TableHeaderCell className="w-14 min-w-14" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -212,11 +213,7 @@ function Explorer({ volume }: { volume: string }) {
                     <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">{e.mode}</TableCell>
                     <TableCell className="pr-3 text-right" onClick={(ev) => ev.stopPropagation()}>
                       {e.kind === 'file' && (
-                        <Button variant="ghost" size="icon-sm" asChild>
-                          <a href={downloadUrl(volume, full)} title={`Download ${e.name}`} aria-label={`Download ${e.name}`}>
-                            <Download />
-                          </a>
-                        </Button>
+                        <IconButton variant="ghost" size="sm" label={`Download ${e.name}`} tooltip={`Download ${e.name}`} icon={<Download />} href={downloadUrl(volume, full)} as={DownloadLink} />
                       )}
                     </TableCell>
                   </TableRow>
@@ -232,6 +229,11 @@ function Explorer({ volume }: { volume: string }) {
   )
 }
 
+/** Plain anchor for API downloads, so the router-aware LinkProvider doesn't route them client-side. */
+function DownloadLink(props: ComponentProps<'a'>) {
+  return <a {...props} download />
+}
+
 const downloadUrl = (volume: string, path: string) => `/api/docker/volumes/${encodeURIComponent(volume)}/download?${new URLSearchParams({ path })}`
 
 function FilePreview({ volume, path, onBack }: { volume: string; path: string; onBack: () => void }) {
@@ -245,15 +247,9 @@ function FilePreview({ volume, path, onBack }: { volume: string; path: string; o
   return (
     <div className="flex h-[calc(100vh-15rem)] min-h-96 flex-col gap-3">
       <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" onClick={onBack}>
-          <ArrowLeft /> Back
-        </Button>
+        <Button variant="secondary" size="sm" icon={<ArrowLeft />} label="Back" onClick={onBack} />
         <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{path}</span>
-        <Button size="sm" asChild>
-          <a href={downloadUrl(volume, path)}>
-            <Download /> Download
-          </a>
-        </Button>
+        <Button variant="primary" size="sm" icon={<Download />} label="Download" href={downloadUrl(volume, path)} as={DownloadLink} />
       </div>
       <div className="scrollbar-thin min-h-0 flex-1 overflow-auto rounded-xl border bg-log">
         {isImage ? (
@@ -267,7 +263,7 @@ function FilePreview({ volume, path, onBack }: { volume: string; path: string; o
             <ErrorAlert error={preview.error} />
           </div>
         ) : preview.data?.binary ? (
-          <EmptyState icon={<File />} title="Binary file" action={<Button asChild><a href={downloadUrl(volume, path)}>Download</a></Button>}>
+          <EmptyState icon={<File />} title="Binary file" action={<Button variant="primary" label="Download" href={downloadUrl(volume, path)} as={DownloadLink} />}>
             This file isn't text, so it can't be previewed here.
           </EmptyState>
         ) : (

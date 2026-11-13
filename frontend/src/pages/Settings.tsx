@@ -1,17 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { toast } from 'sonner'
 import { api, type GitAccount } from '@/api'
 import { BackupDestinationsSection } from '@/components/app/backups'
 import { Confirm } from '@/components/app/confirm'
 import { GithubIcon } from '@/components/app/GithubIcon'
 import { EmptyState, ErrorAlert, Loading, Page, PageHeader, Surface } from '@/components/app/page'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Button } from '@astryxdesign/core/Button'
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import { timeAgo } from '@/lib/format'
+import { toast } from '@/lib/toast'
 
 export function useGitAccounts() {
   return useQuery({ queryKey: ['git-accounts'], queryFn: () => api.get<GitAccount[]>('/settings/git-accounts') })
@@ -42,16 +42,14 @@ export function SettingsPage() {
               Credentials for private repositories. Services use the account for their repository's host automatically, or one you pick in their Settings.
             </p>
           </div>
-          <Button size="sm" onClick={() => setEditing('new')}>
-            <Plus /> Add account
-          </Button>
+          <Button size="sm" variant="primary" icon={<Plus />} label="Add account" onClick={() => setEditing('new')} />
         </div>
         <ErrorAlert error={error} className="mb-3" />
         <Surface>
           {isLoading ? (
             <Loading />
           ) : !data?.length ? (
-            <EmptyState icon={<KeyRound />} title="No git accounts" action={<Button onClick={() => setEditing('new')}>Add a GitHub account</Button>}>
+            <EmptyState icon={<KeyRound />} title="No git accounts" action={<Button variant="primary" label="Add a GitHub account" onClick={() => setEditing('new')} />}>
               Public repositories work without one. Add an account to deploy from private repositories.
             </EmptyState>
           ) : (
@@ -68,12 +66,15 @@ export function SettingsPage() {
                       {a.username && ` · ${a.username}`} · added {timeAgo(a.created_at)}
                     </div>
                   </div>
-                  <Button variant="ghost" size="icon-sm" onClick={() => setEditing(a)} aria-label={`Edit ${a.name}`}>
-                    <Pencil />
-                  </Button>
-                  <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => setDeleting(a)} aria-label={`Remove ${a.name}`}>
-                    <Trash2 />
-                  </Button>
+                  <IconButton variant="ghost" size="sm" icon={<Pencil />} label={`Edit ${a.name}`} onClick={() => setEditing(a)} />
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-destructive"
+                    icon={<Trash2 />}
+                    label={`Remove ${a.name}`}
+                    onClick={() => setDeleting(a)}
+                  />
                 </div>
               ))}
             </div>
@@ -96,10 +97,8 @@ export function SettingsPage() {
 
 function AccountDialog({ account, onClose }: { account: GitAccount | 'new' | null; onClose: () => void }) {
   return (
-    <Dialog open={account !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="gap-0 p-0 sm:max-w-md">
-        {account !== null && <AccountForm key={account === 'new' ? 'new' : account.id} account={account === 'new' ? null : account} onClose={onClose} />}
-      </DialogContent>
+    <Dialog isOpen={account !== null} onOpenChange={(o) => !o && onClose()} width={448} purpose="form" padding={0}>
+      {account !== null && <AccountForm key={account === 'new' ? 'new' : account.id} account={account === 'new' ? null : account} onClose={onClose} />}
     </Dialog>
   )
 }
@@ -128,54 +127,49 @@ function AccountForm({ account, onClose }: { account: GitAccount | null; onClose
         save.mutate()
       }}
     >
-      <DialogHeader className="border-b px-5 py-4">
-        <DialogTitle>{account ? `Edit ${account.name}` : 'Add git account'}</DialogTitle>
-        <DialogDescription>
-          For GitHub, create a{' '}
-          <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer" className="text-brand hover:underline">
-            fine-grained token
-          </a>{' '}
-          with read-only <em>Contents</em> access to the repositories you deploy.
-        </DialogDescription>
-      </DialogHeader>
+      <DialogHeader
+        className="border-b px-5 py-4"
+        title={account ? `Edit ${account.name}` : 'Add git account'}
+        onOpenChange={(o) => !o && onClose()}
+        subtitle={
+          <>
+            For GitHub, create a{' '}
+            <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer" className="text-brand hover:underline">
+              fine-grained token
+            </a>{' '}
+            with read-only <em>Contents</em> access to the repositories you deploy.
+          </>
+        }
+      />
       <div className="space-y-4 px-5 py-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="acc-name">Name</Label>
-          <Input id="acc-name" value={name} onChange={(e) => setName(e.target.value)} required />
-        </div>
+        <TextInput label="Name" value={name} onChange={setName} isRequired width="100%" />
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="acc-host">Host</Label>
-            <Input id="acc-host" value={host} onChange={(e) => setHost(e.target.value)} placeholder="github.com" className="font-mono" />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="acc-user">Username</Label>
-            <Input id="acc-user" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Optional" />
-          </div>
+          <TextInput label="Host" value={host} onChange={setHost} placeholder="github.com" controlClassName="font-mono" width="100%" />
+          <TextInput label="Username" value={username} onChange={setUsername} isOptional width="100%" />
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="acc-token">Access token</Label>
-          <Input
-            id="acc-token"
-            type="password"
-            autoComplete="off"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder={account ? 'Leave empty to keep the saved token' : 'github_pat_…'}
-            className="font-mono"
-            required={!account}
-          />
-          <p className="text-xs text-muted-foreground">Stored on the server and never shown again.</p>
-        </div>
+        <TextInput
+          label="Access token"
+          type="password"
+          autoComplete="off"
+          value={token}
+          onChange={setToken}
+          placeholder={account ? 'Leave empty to keep the saved token' : 'github_pat_…'}
+          controlClassName="font-mono"
+          isRequired={!account}
+          description="Stored on the server and never shown again."
+          width="100%"
+        />
         <ErrorAlert error={save.error} />
       </div>
       <div className="flex justify-end gap-2 border-t bg-muted/30 px-5 py-3">
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={save.isPending}>
-          {account ? 'Save' : 'Add account'}
-        </Button>
+        <Button variant="ghost" label="Cancel" onClick={onClose} />
+        <Button
+          type="submit"
+          variant="primary"
+          label={account ? 'Save' : 'Add account'}
+          isLoading={save.isPending}
+          isDisabled={!name.trim() || (!account && !token)}
+        />
       </div>
     </form>
   )

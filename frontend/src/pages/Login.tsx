@@ -3,9 +3,8 @@ import { useState } from 'react'
 import { api } from '@/api'
 import { Logo } from '@/components/app/Logo'
 import { ErrorAlert } from '@/components/app/page'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Button } from '@astryxdesign/core/Button'
+import { TextInput } from '@astryxdesign/core/TextInput'
 
 export function LoginPage({ setup }: { setup: boolean }) {
   const qc = useQueryClient()
@@ -32,28 +31,35 @@ export function LoginPage({ setup }: { setup: boolean }) {
             submit.mutate()
           }}
         >
-          <div className="space-y-2">
-            <Label htmlFor="username">Username</Label>
-            <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus={!setup} required />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete={setup ? 'new-password' : 'current-password'}
-              autoFocus={setup}
-              required
-              minLength={setup ? 8 : undefined}
-            />
-            {setup && <p className="text-xs text-muted-foreground">At least 8 characters.</p>}
-          </div>
+          <TextInput
+            label="Username"
+            value={username}
+            onChange={setUsername}
+            autoComplete="username"
+            hasAutoFocus={!setup}
+            hasAutoCorrect={false}
+            autoCapitalize="off"
+            width="100%"
+          />
+          <TextInput
+            label="Password"
+            type="password"
+            value={password}
+            onChange={setPassword}
+            autoComplete={setup ? 'new-password' : 'current-password'}
+            hasAutoFocus={setup}
+            description={setup ? 'At least 8 characters.' : undefined}
+            width="100%"
+          />
           <ErrorAlert error={submit.error} />
-          <Button type="submit" className="h-9 w-full" disabled={submit.isPending}>
-            {setup ? 'Create account' : 'Sign in'}
-          </Button>
+          <Button
+            type="submit"
+            variant="primary"
+            label={setup ? 'Create account' : 'Sign in'}
+            width="100%"
+            isLoading={submit.isPending}
+            isDisabled={!username || password.length < (setup ? 8 : 1)}
+          />
         </form>
       </div>
     </div>

@@ -1,8 +1,11 @@
+import { Button } from '@astryxdesign/core/Button'
+import { DropdownMenu, DropdownMenuDivider, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Selector } from '@astryxdesign/core/Selector'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDownToLine, GitBranch, Layers, MoreHorizontal, Play, Power, RotateCw, Square, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { toast } from 'sonner'
 import { api, repoLabel, type Stack, type StackDetail } from '@/api'
 import { Confirm } from '@/components/app/confirm'
 import { ContainersTable } from '@/components/app/containers'
@@ -14,10 +17,8 @@ import { AutoDeploySettings, StackSourceSettings, type StackSourceConfig } from 
 import { ChangesBar, CodeEditor, ServicePanel, SettingsSection, usePanelTab, VariablesEditor } from '@/components/app/panel'
 import { Status } from '@/components/app/status'
 import { DeploymentHistory, useRunAction } from '@/components/app/updates'
-import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { containerName, timeAgo } from '@/lib/format'
+import { toast } from '@/lib/toast'
 
 const TABS = ['deployments', 'services', 'logs', 'terminal', 'variables', 'settings'] as const
 
@@ -135,48 +136,34 @@ function StackPanelInner({ name }: { name: string }) {
       onTabChange={setTab}
       actions={
         <>
-          <Button size="sm" onClick={() => action('deploy')} disabled={run.isPending || save.isPending}>
-            <Play /> {up ? 'Redeploy' : 'Deploy'}
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon-sm" aria-label="More actions">
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onSelect={() => action('pull')}>
-                <ArrowDownToLine /> Pull images
-              </DropdownMenuItem>
-              {up && (
-                <>
-                  <DropdownMenuItem onSelect={() => action('restart')}>
-                    <RotateCw /> Restart
-                  </DropdownMenuItem>
-                  {data.status === 'stopped' ? (
-                    <DropdownMenuItem onSelect={() => action('start')}>
-                      <Power /> Start
-                    </DropdownMenuItem>
-                  ) : (
-                    <DropdownMenuItem onSelect={() => action('stop')}>
-                      <Square /> Stop
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onSelect={() => setConfirm('down')}>
-                    <Power /> Take down
-                  </DropdownMenuItem>
-                </>
-              )}
-              {!up && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onSelect={() => setConfirm('delete')}>
-                    <Trash2 /> Delete stack
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
+          <Button
+            variant="primary"
+            size="sm"
+            label={up ? 'Redeploy' : 'Deploy'}
+            icon={<Play />}
+            onClick={() => action('deploy')}
+            isDisabled={run.isPending || save.isPending}
+          />
+          <DropdownMenu
+            alignment="end"
+            menuWidth={176}
+            hasChevron={false}
+            renderTrigger={(p) => <IconButton {...p} variant="secondary" size="sm" label="More actions" icon={<MoreHorizontal />} />}
+          >
+            <DropdownMenuItem icon={<ArrowDownToLine />} label="Pull images" onClick={() => action('pull')} />
+            {up && <DropdownMenuItem icon={<RotateCw />} label="Restart" onClick={() => action('restart')} />}
+            {up &&
+              (data.status === 'stopped' ? (
+                <DropdownMenuItem icon={<Power />} label="Start" onClick={() => action('start')} />
+              ) : (
+                <DropdownMenuItem icon={<Square />} label="Stop" onClick={() => action('stop')} />
+              ))}
+            <DropdownMenuDivider />
+            {up ? (
+              <DropdownMenuItem icon={<Power />} label="Take down" variant="destructive" onClick={() => setConfirm('down')} />
+            ) : (
+              <DropdownMenuItem icon={<Trash2 />} label="Delete stack" variant="destructive" onClick={() => setConfirm('delete')} />
+            )}
           </DropdownMenu>
         </>
       }
@@ -198,7 +185,7 @@ function StackPanelInner({ name }: { name: string }) {
             <ContainersTable containers={data.containers} showStack={false} />
           </div>
         ) : (
-          <EmptyState icon={<Layers />} title="Stack is not running" action={<Button onClick={() => action('deploy')}>Deploy now</Button>}>
+          <EmptyState icon={<Layers />} title="Stack is not running" action={<Button variant="primary" label="Deploy now" onClick={() => action('deploy')} />}>
             Deploy the stack to start its services.
           </EmptyState>
         ))}
@@ -207,18 +194,14 @@ function StackPanelInner({ name }: { name: string }) {
         (selectedLog ? (
           <div className="flex h-[calc(100vh-15rem)] min-h-96 flex-col gap-3">
             {data.containers.length > 1 && (
-              <Select value={selectedLog.Id} onValueChange={setLogContainer}>
-                <SelectTrigger className="w-64">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {data.containers.map((c) => (
-                    <SelectItem key={c.Id} value={c.Id}>
-                      {c.Labels['com.docker.compose.service'] ?? containerName(c.Names)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Selector
+                label="Service"
+                isLabelHidden
+                width={256}
+                value={selectedLog.Id}
+                onChange={setLogContainer}
+                options={data.containers.map((c) => ({ value: c.Id, label: c.Labels['com.docker.compose.service'] ?? containerName(c.Names) }))}
+              />
             )}
             {tab === 'logs' ? (
               <LogViewer key={selectedLog.Id} containerId={selectedLog.Id} className="min-h-0 flex-1" />
@@ -261,12 +244,8 @@ function StackPanelInner({ name }: { name: string }) {
           )}
           <SettingsSection title="Danger zone" description="Deleting removes the stack from Harbor. Take it down first to stop its containers." danger>
             <div className="flex flex-wrap gap-2">
-              <Button variant="destructive" size="sm" disabled={!up} onClick={() => setConfirm('down')}>
-                <Power /> Take down
-              </Button>
-              <Button variant="destructive" size="sm" disabled={up} onClick={() => setConfirm('delete')}>
-                <Trash2 /> Delete stack
-              </Button>
+              <Button variant="destructive" size="sm" label="Take down" icon={<Power />} isDisabled={!up} onClick={() => setConfirm('down')} />
+              <Button variant="destructive" size="sm" label="Delete stack" icon={<Trash2 />} isDisabled={up} onClick={() => setConfirm('delete')} />
             </div>
           </SettingsSection>
         </div>

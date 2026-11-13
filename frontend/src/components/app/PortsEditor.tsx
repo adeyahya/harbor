@@ -2,9 +2,10 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, Check, FileCode2, Loader2, Plus, Rows3, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, type PortsResponse, type PortStatus } from '@/api'
-import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Button } from '@astryxdesign/core/Button'
+import { IconButton } from '@astryxdesign/core/IconButton'
+import { Selector } from '@astryxdesign/core/Selector'
+import { Tooltip } from '@astryxdesign/core/Tooltip'
 import { cn } from '@/lib/utils'
 import { CodeEditor } from './panel'
 
@@ -59,15 +60,12 @@ function HostStatus({ status, checking }: { status?: PortStatus; checking: boole
   if (checking && !status) return <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
   if (!status) return <span className="size-3.5" />
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        {status.available ? (
-          <Check className="size-3.5 text-success" aria-label="Port is free" />
-        ) : (
-          <TriangleAlert className="size-3.5 text-warning" aria-label={`In use by ${status.used_by}`} />
-        )}
-      </TooltipTrigger>
-      <TooltipContent>{status.available ? 'Free on this host' : `In use by ${status.used_by}`}</TooltipContent>
+    <Tooltip content={status.available ? 'Free on this host' : `In use by ${status.used_by}`} hasHoverIndication={false}>
+      {status.available ? (
+        <Check className="size-3.5 text-success" aria-label="Port is free" />
+      ) : (
+        <TriangleAlert className="size-3.5 text-warning" aria-label={`In use by ${status.used_by}`} />
+      )}
     </Tooltip>
   )
 }
@@ -132,13 +130,15 @@ export function PortsEditor({ value, onChange, owner, image }: { value: string; 
           {rows.length ? `${rows.length} port mapping${rows.length === 1 ? '' : 's'}` : 'No published ports'}
         </p>
         <div className="flex gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => setRaw((r) => !r)}>
-            {raw ? <Rows3 /> : <FileCode2 />} {raw ? 'Table view' : 'Raw editor'}
-          </Button>
+          <Button variant="secondary" size="sm" label={raw ? 'Table view' : 'Raw editor'} icon={raw ? <Rows3 /> : <FileCode2 />} onClick={() => setRaw((r) => !r)} />
           {!raw && (
-            <Button type="button" size="sm" onClick={() => add(unmapped[0]?.split('/')[0] ?? '', unmapped[0]?.split('/')[1] ?? 'tcp')}>
-              <Plus /> Add port
-            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              label="Add port"
+              icon={<Plus />}
+              onClick={() => add(unmapped[0]?.split('/')[0] ?? '', unmapped[0]?.split('/')[1] ?? 'tcp')}
+            />
           )}
         </div>
       </div>
@@ -167,9 +167,7 @@ export function PortsEditor({ value, onChange, owner, image }: { value: string; 
             Not a valid port mapping: {invalid.map((l) => <code key={l} className="mx-1 font-mono text-xs">{l.trim()}</code>)}
           </span>
           {!raw && (
-            <Button type="button" variant="outline" size="sm" onClick={() => setRaw(true)}>
-              Fix in raw editor
-            </Button>
+            <Button variant="secondary" size="sm" label="Fix in raw editor" onClick={() => setRaw(true)} />
           )}
         </div>
       )}
@@ -181,9 +179,7 @@ export function PortsEditor({ value, onChange, owner, image }: { value: string; 
       ) : rows.length === 0 ? (
         <div className="rounded-xl border border-dashed px-6 py-8 text-center">
           <p className="text-sm text-muted-foreground">The container isn't reachable from the host until you publish a port.</p>
-          <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => add(unmapped[0]?.split('/')[0] ?? '')}>
-            <Plus /> Add port
-          </Button>
+          <Button variant="secondary" size="sm" label="Add port" icon={<Plus />} className="mt-3" onClick={() => add(unmapped[0]?.split('/')[0] ?? '')} />
         </div>
       ) : (
         <div className="divide-y overflow-hidden rounded-xl border bg-card">
@@ -222,18 +218,17 @@ export function PortsEditor({ value, onChange, owner, image }: { value: string; 
                     className={portInput}
                     aria-label="Container port"
                   />
-                  <Select value={l.proto || 'tcp'} onValueChange={(v) => update(i, { proto: v })}>
-                    <SelectTrigger size="sm" className="w-full font-mono text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="tcp">tcp</SelectItem>
-                      <SelectItem value="udp">udp</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => remove(i)} aria-label="Remove port">
-                    <Trash2 />
-                  </Button>
+                  <Selector
+                    label="Protocol"
+                    isLabelHidden
+                    size="sm"
+                    width="100%"
+                    controlClassName="font-mono text-xs"
+                    value={l.proto || 'tcp'}
+                    onChange={(v) => update(i, { proto: v })}
+                    options={['tcp', 'udp']}
+                  />
+                  <IconButton variant="ghost" size="sm" label="Remove port" icon={<Trash2 />} onClick={() => remove(i)} />
                 </div>
                 {l.ip && <p className="mt-1 text-xs text-muted-foreground">Bound to {l.ip} only</p>}
                 {taken && (

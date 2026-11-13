@@ -71,6 +71,11 @@ function PortLinks({ ports }: { ports: number[] }) {
           {window.location.hostname}:{p}
         </a>
       ))}
+      {ports.length > 3 && (
+        <span className="font-mono text-[11.5px] text-muted-foreground" title={ports.slice(3).map((p) => `${window.location.hostname}:${p}`).join('\n')}>
+          +{ports.length - 3} more
+        </span>
+      )}
     </div>
   )
 }

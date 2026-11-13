@@ -155,7 +155,7 @@ export function ImportPage() {
                         {c.is_komodo && <Badge tone="warning">Komodo itself</Badge>}
                         {c.is_harbor && <Badge tone="warning">Harbor itself</Badge>}
                       </div>
-                      <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+                      <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground" title={[c.image, ...c.ports].join('\n')}>
                         {c.image}
                         {c.ports.length > 0 && ` · ${c.ports.join(', ')}`}
                       </div>

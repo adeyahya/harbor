@@ -11,7 +11,7 @@ import { Button } from '@astryxdesign/core/Button'
 import { IconButton } from '@astryxdesign/core/IconButton'
 import { Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow } from '@astryxdesign/core/Table'
 import { bytes, timeAgo } from '@/lib/format'
-import { cn } from '@/lib/utils'
+import { cn, fitColumn } from '@/lib/utils'
 
 const TABS = ['files', 'backups', 'details'] as const
 const IMAGE = /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i
@@ -180,9 +180,9 @@ function Explorer({ volume }: { volume: string }) {
             <TableHeader>
               <TableRow isHeaderRow>
                 <TableHeaderCell className="pl-4">Name</TableHeaderCell>
-                <TableHeaderCell className="w-24 text-right">Size</TableHeaderCell>
-                <TableHeaderCell className="hidden w-32 sm:table-cell">Modified</TableHeaderCell>
-                <TableHeaderCell className="hidden w-28 md:table-cell">Permissions</TableHeaderCell>
+                <TableHeaderCell className={`${fitColumn} text-right`}>Size</TableHeaderCell>
+                <TableHeaderCell className={`hidden sm:table-cell ${fitColumn}`}>Modified</TableHeaderCell>
+                <TableHeaderCell className={`hidden md:table-cell ${fitColumn}`}>Permissions</TableHeaderCell>
                 <TableHeaderCell className="w-14 min-w-14" />
               </TableRow>
             </TableHeader>
@@ -208,8 +208,8 @@ function Explorer({ volume }: { volume: string }) {
                         {e.kind === 'link' && <span className="text-xs text-muted-foreground">symlink</span>}
                       </span>
                     </TableCell>
-                    <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">{e.kind === 'file' ? bytes(e.size) : '—'}</TableCell>
-                    <TableCell className="hidden text-xs text-muted-foreground sm:table-cell">{timeAgo(e.modified)}</TableCell>
+                    <TableCell className="text-right font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">{e.kind === 'file' ? bytes(e.size) : '—'}</TableCell>
+                    <TableCell className="hidden text-xs whitespace-nowrap text-muted-foreground sm:table-cell">{timeAgo(e.modified)}</TableCell>
                     <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">{e.mode}</TableCell>
                     <TableCell className="pr-3 text-right" onClick={(ev) => ev.stopPropagation()}>
                       {e.kind === 'file' && (

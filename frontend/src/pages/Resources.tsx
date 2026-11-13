@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow } f
 import { TextInput } from '@astryxdesign/core/TextInput'
 import { bytes, shortId, timeAgo } from '@/lib/format'
 import { toast } from '@/lib/toast'
+import { fitColumn } from '@/lib/utils'
 
 interface Column<T> {
   head: string
@@ -136,6 +137,7 @@ function ResourcePage<T>(props: {
 }
 
 const mono = 'font-mono text-[12px]'
+const fit = fitColumn
 
 export function ImagesPage() {
   return (
@@ -154,15 +156,15 @@ export function ImagesPage() {
         {
           head: 'Repository',
           cell: (i) => (
-            <div className={`flex flex-col gap-0.5 ${mono}`}>
+            <div className={`flex flex-col gap-0.5 break-words ${mono}`}>
               {i.RepoTags?.length ? i.RepoTags.map((t) => <span key={t}>{t}</span>) : <span className="text-muted-foreground">&lt;none&gt;</span>}
             </div>
           ),
         },
-        { head: 'ID', cell: (i) => <span className={`${mono} text-muted-foreground`}>{shortId(i.Id)}</span>, className: 'hidden md:table-cell' },
-        { head: 'Usage', cell: (i) => <Status status={i.InUse ? 'in_use' : 'unused'} /> },
-        { head: 'Size', cell: (i) => <span className="tabular-nums">{bytes(i.Size)}</span> },
-        { head: 'Created', cell: (i) => <span className="text-muted-foreground">{timeAgo(i.Created)}</span>, className: 'hidden sm:table-cell' },
+        { head: 'ID', cell: (i) => <span className={`${mono} text-muted-foreground`}>{shortId(i.Id)}</span>, className: `hidden md:table-cell ${fit}` },
+        { head: 'Usage', cell: (i) => <Status status={i.InUse ? 'in_use' : 'unused'} />, className: fit },
+        { head: 'Size', cell: (i) => <span className="tabular-nums">{bytes(i.Size)}</span>, className: fit },
+        { head: 'Created', cell: (i) => <span className="text-muted-foreground">{timeAgo(i.Created)}</span>, className: `hidden sm:table-cell ${fit}` },
       ]}
     />
   )
@@ -212,9 +214,9 @@ export function VolumesPage() {
       columns={[
         { head: 'Name', cell: (v) => <span className={`${mono} block max-w-md truncate`} title={v.Mountpoint}>{v.Name}</span> },
         ...(usage.data ? [{ head: 'Size', cell: (v: Volume) => <UsageCell usage={sizes.get(v.Name)} largest={largest} />, className: 'w-56 min-w-44' }] : []),
-        { head: 'Driver', cell: (v) => v.Driver, className: 'hidden sm:table-cell' },
-        { head: 'Stack', cell: (v) => v.Labels?.['com.docker.compose.project'] ?? <span className="text-muted-foreground/60">—</span> },
-        { head: 'Created', cell: (v) => <span className="text-muted-foreground">{v.CreatedAt ? timeAgo(v.CreatedAt) : '—'}</span>, className: 'hidden sm:table-cell' },
+        { head: 'Driver', cell: (v) => v.Driver, className: `hidden sm:table-cell ${fit}` },
+        { head: 'Stack', cell: (v) => v.Labels?.['com.docker.compose.project'] ?? <span className="text-muted-foreground/60">—</span>, className: fit },
+        { head: 'Created', cell: (v) => <span className="text-muted-foreground">{v.CreatedAt ? timeAgo(v.CreatedAt) : '—'}</span>, className: `hidden sm:table-cell ${fit}` },
       ]}
     />
   )
@@ -263,9 +265,9 @@ export function NetworksPage() {
             </span>
           ),
         },
-        { head: 'Driver', cell: (n) => n.Driver },
-        { head: 'Subnet', cell: (n) => <span className={mono}>{n.IPAM?.Config?.map((c) => c.Subnet).filter(Boolean).join(', ') || '—'}</span>, className: 'hidden sm:table-cell' },
-        { head: 'Created', cell: (n) => <span className="text-muted-foreground">{timeAgo(n.Created)}</span>, className: 'hidden md:table-cell' },
+        { head: 'Driver', cell: (n) => n.Driver, className: fit },
+        { head: 'Subnet', cell: (n) => <span className={mono}>{n.IPAM?.Config?.map((c) => c.Subnet).filter(Boolean).join(', ') || '—'}</span>, className: `hidden sm:table-cell ${fit}` },
+        { head: 'Created', cell: (n) => <span className="text-muted-foreground">{timeAgo(n.Created)}</span>, className: `hidden md:table-cell ${fit}` },
       ]}
     />
   )

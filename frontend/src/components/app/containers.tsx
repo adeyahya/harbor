@@ -4,39 +4,108 @@ import { Link, useNavigate } from 'react-router'
 import type { ContainerInspect, ContainerSummary, Port } from '@/api'
 import { DropdownMenu, DropdownMenuDivider, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
 import { IconButton } from '@astryxdesign/core/IconButton'
+import { Popover } from '@astryxdesign/core/Popover'
 import { Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow } from '@astryxdesign/core/Table'
 import { containerName, shortId, timeAgo } from '@/lib/format'
 import { Confirm } from './confirm'
 import { Status } from './status'
 import { useRunAction } from './updates'
 
-export function PortChips({ ports }: { ports?: Port[] | null }) {
-  ports = ports ?? []
+const chip = 'rounded-md border px-1.5 py-0.5 font-mono text-[11px] whitespace-nowrap'
+
+const portLabel = (p: Port) => `${p.PublicPort ? `${p.PublicPort}:` : ''}${p.PrivatePort}${p.Type !== 'tcp' ? `/${p.Type}` : ''}`
+
+/** Published ports (reachable from the host) first, then exposed-only ones, each by port number. */
+function sortedPorts(ports: Port[]): Port[] {
   // Docker reports IPv4 and IPv6 bindings separately; show each mapping once.
-  const unique = [...new Map(ports.map((p) => [`${p.PublicPort}-${p.PrivatePort}-${p.Type}`, p])).values()].sort((a, b) => a.PrivatePort - b.PrivatePort)
-  if (!unique.length) return <span className="text-muted-foreground/60">—</span>
+  const unique = [...new Map(ports.map((p) => [`${p.PublicPort}-${p.PrivatePort}-${p.Type}`, p])).values()]
+  return unique.sort((a, b) => Number(!a.PublicPort) - Number(!b.PublicPort) || a.PrivatePort - b.PrivatePort || a.Type.localeCompare(b.Type))
+}
+
+function PortChip({ port }: { port: Port }) {
+  const label = portLabel(port)
+  return port.PublicPort ? (
+    <a
+      href={`http://${window.location.hostname}:${port.PublicPort}`}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className={`${chip} border-brand/25 bg-brand/10 text-brand hover:underline`}
+    >
+      {label}
+    </a>
+  ) : (
+    <span className={`${chip} bg-muted text-muted-foreground`}>{label}</span>
+  )
+}
+
+/**
+ * A container's ports as chips. With `limit`, shows that many and a "+N" chip
+ * that opens a popover listing every port.
+ */
+export function PortChips({ ports, limit }: { ports?: Port[] | null; limit?: number }) {
+  const all = sortedPorts(ports ?? [])
+  if (!all.length) return <span className="text-muted-foreground/60">—</span>
+  const shown = limit === undefined ? all : all.slice(0, limit)
+  const hidden = all.length - shown.length
   return (
-    <div className="flex flex-wrap gap-1">
-      {unique.map((p) => {
-        const label = `${p.PublicPort ? `${p.PublicPort}:` : ''}${p.PrivatePort}${p.Type !== 'tcp' ? `/${p.Type}` : ''}`
-        return p.PublicPort ? (
-          <a
-            key={label}
-            href={`http://${window.location.hostname}:${p.PublicPort}`}
-            target="_blank"
-            rel="noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="rounded-md border border-brand/25 bg-brand/10 px-1.5 py-0.5 font-mono text-[11px] text-brand hover:underline"
-          >
-            {label}
-          </a>
-        ) : (
-          <span key={label} className="rounded-md border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-            {label}
-          </span>
-        )
-      })}
+    <div className="flex flex-wrap items-center gap-1">
+      {shown.map((p) => (
+        <PortChip key={portLabel(p)} port={p} />
+      ))}
+      {hidden > 0 && <AllPorts ports={all} more={hidden} />}
     </div>
+  )
+}
+
+function AllPorts({ ports, more }: { ports: Port[]; more: number }) {
+  const published = ports.filter((p) => p.PublicPort)
+  const exposed = ports.filter((p) => !p.PublicPort)
+  return (
+    <Popover
+      label="All ports"
+      placement="below"
+      alignment="start"
+      width={320}
+      content={
+        // The popover portals out, but React events still bubble to the table row.
+        <div className="space-y-3" onClick={(e) => e.stopPropagation()}>
+          <p className="text-sm font-medium">{ports.length} ports</p>
+          {[
+            { title: 'Published', hint: 'Open on the host', list: published },
+            { title: 'Exposed only', hint: 'Reachable from other containers', list: exposed },
+          ]
+            .filter((g) => g.list.length)
+            .map((g) => (
+              <div key={g.title}>
+                <p className="mb-1.5 text-xs text-muted-foreground">
+                  {g.title} · {g.hint}
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {g.list.map((p) => (
+                    <PortChip key={portLabel(p)} port={p} />
+                  ))}
+                </div>
+              </div>
+            ))}
+        </div>
+      }
+    >
+      {(trigger) => (
+        <button
+          {...trigger}
+          type="button"
+          aria-label={`Show all ${ports.length} ports`}
+          onClick={(e) => {
+            e.stopPropagation()
+            trigger.onClick(e)
+          }}
+          className={`${chip} bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground`}
+        >
+          +{more}
+        </button>
+      )}
+    </Popover>
   )
 }
 
@@ -87,12 +156,12 @@ export function ContainersTable({ containers, showStack = true }: { containers: 
     <Table hasHover>
       <TableHeader>
         <TableRow isHeaderRow>
-          <TableHeaderCell className="pl-4">Name</TableHeaderCell>
-          <TableHeaderCell>Status</TableHeaderCell>
+          <TableHeaderCell className="min-w-44 pl-4">Name</TableHeaderCell>
+          <TableHeaderCell className="min-w-28">Status</TableHeaderCell>
           <TableHeaderCell className="hidden md:table-cell">Image</TableHeaderCell>
-          <TableHeaderCell>Ports</TableHeaderCell>
-          {showStack && <TableHeaderCell className="hidden lg:table-cell">Stack</TableHeaderCell>}
-          <TableHeaderCell className="hidden sm:table-cell">Created</TableHeaderCell>
+          <TableHeaderCell className="min-w-40">Ports</TableHeaderCell>
+          {showStack && <TableHeaderCell className="hidden min-w-32 lg:table-cell">Stack</TableHeaderCell>}
+          <TableHeaderCell className="hidden min-w-28 sm:table-cell">Created</TableHeaderCell>
           <TableHeaderCell className="w-14 min-w-14" />
         </TableRow>
       </TableHeader>
@@ -103,10 +172,10 @@ export function ContainersTable({ containers, showStack = true }: { containers: 
           return (
             <TableRow key={c.Id} className="cursor-pointer" onClick={() => navigate(`/containers/${c.Id}`)}>
               <TableCell className="pl-4">
-                <div className="font-medium">{name}</div>
+                <div className="font-medium break-words">{name}</div>
                 <div className="text-xs text-muted-foreground">{c.Status}</div>
               </TableCell>
-              <TableCell>
+              <TableCell className="whitespace-nowrap">
                 <Status status={c.State} />
               </TableCell>
               <TableCell className="hidden max-w-52 font-mono text-xs text-muted-foreground md:table-cell">
@@ -115,10 +184,10 @@ export function ContainersTable({ containers, showStack = true }: { containers: 
                 </div>
               </TableCell>
               <TableCell>
-                <PortChips ports={c.Ports} />
+                <PortChips ports={c.Ports} limit={2} />
               </TableCell>
               {showStack && (
-                <TableCell className="hidden lg:table-cell">
+                <TableCell className="hidden break-words lg:table-cell">
                   {project ? (
                     <Link to={`/stacks/${project}`} onClick={(e) => e.stopPropagation()} className="text-brand hover:underline">
                       {project}
@@ -128,7 +197,7 @@ export function ContainersTable({ containers, showStack = true }: { containers: 
                   )}
                 </TableCell>
               )}
-              <TableCell className="hidden text-muted-foreground sm:table-cell">{timeAgo(c.Created)}</TableCell>
+              <TableCell className="hidden whitespace-nowrap text-muted-foreground sm:table-cell">{timeAgo(c.Created)}</TableCell>
               {/* Dialogs portal out but their events still bubble here; keep them off the row. */}
               <TableCell className="pr-3 text-right" onClick={(e) => e.stopPropagation()}>
                 <ContainerMenu id={c.Id} state={c.State} name={name} />

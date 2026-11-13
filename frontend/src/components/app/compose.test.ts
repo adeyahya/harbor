@@ -17,6 +17,7 @@ const svc = (over: Partial<ServiceSettings>): ServiceSettings => ({
   labels: '',
   devices: '',
   group_add: '',
+  security_opt: '',
   warnings: [],
   ...over,
 })

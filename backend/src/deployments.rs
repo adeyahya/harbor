@@ -74,6 +74,8 @@ pub struct Deployment {
     pub devices: String,
     /// Extra groups for the container's user, one per line.
     pub group_add: String,
+    /// Docker security options, e.g. `apparmor=unconfined`, one per line.
+    pub security_opt: String,
     pub pinned: bool,
     pub group_id: Option<i64>,
     /// Git account for the repository; None picks the one for its host.
@@ -111,6 +113,8 @@ struct Snapshot {
     devices: String,
     #[serde(default)]
     group_add: String,
+    #[serde(default)]
+    security_opt: String,
 }
 
 impl Snapshot {
@@ -126,6 +130,7 @@ impl Snapshot {
             labels: d.labels.clone(),
             devices: d.devices.clone(),
             group_add: d.group_add.clone(),
+            security_opt: d.security_opt.clone(),
         }
     }
 
@@ -174,6 +179,8 @@ struct DeploymentInput {
     devices: String,
     #[serde(default)]
     group_add: String,
+    #[serde(default)]
+    security_opt: String,
     #[serde(default)]
     git_account_id: Option<i64>,
     #[serde(default)]
@@ -417,6 +424,7 @@ fn validate(input: &mut DeploymentInput) -> AppResult<()> {
     parse_restart(&input.restart)?;
     parse_ports(&input.ports)?;
     parse_devices(&input.devices)?;
+    parse_security_opt(&input.security_opt)?;
     Ok(())
 }
 
@@ -464,8 +472,8 @@ async fn create(
     let d = sqlx::query_as::<_, Deployment>(
         "INSERT INTO deployments (name, image, ports, env, volumes, network, restart, command, created_at, updated_at,
            source, git_url, git_branch, build_context, dockerfile, build_args, git_token, auto_deploy, webhook_secret, labels, git_account_id,
-           upstream_id, devices, group_add)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+           upstream_id, devices, group_add, security_opt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
     )
     .bind(&name)
     // A promote deployment's image is whatever it last promoted.
@@ -492,6 +500,7 @@ async fn create(
     .bind(input.upstream_id)
     .bind(&input.devices)
     .bind(&input.group_add)
+    .bind(&input.security_opt)
     .fetch_one(&state.db)
     .await?;
     Ok(Json(d))
@@ -516,7 +525,7 @@ async fn update(
            ports = ?3, env = ?4, volumes = ?5, network = ?6, restart = ?7, command = ?8, updated_at = ?9,
            source = ?1, git_url = ?10, git_branch = ?11, build_context = ?12, dockerfile = ?13, build_args = ?14,
            git_token = COALESCE(?15, git_token), auto_deploy = ?16, labels = ?18, git_account_id = ?19,
-           upstream_id = ?20, devices = ?21, group_add = ?22
+           upstream_id = ?20, devices = ?21, group_add = ?22, security_opt = ?23
          WHERE name = ?17 RETURNING *",
     )
     .bind(&input.source)
@@ -541,6 +550,7 @@ async fn update(
     .bind(input.upstream_id)
     .bind(&input.devices)
     .bind(&input.group_add)
+    .bind(&input.security_opt)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::not_found(format!("deployment '{name}' not found")))?;
@@ -995,7 +1005,7 @@ async fn roll_back(
     // stays put so the poller doesn't immediately redeploy the newer head.
     let (commit, message) = detail.split_once(' ').unwrap_or((detail, ""));
     sqlx::query(
-        "UPDATE deployments SET image = ?, ports = ?, env = ?, volumes = ?, network = ?, restart = ?, command = ?, labels = ?, devices = ?, group_add = ?, updated_at = ?,
+        "UPDATE deployments SET image = ?, ports = ?, env = ?, volumes = ?, network = ?, restart = ?, command = ?, labels = ?, devices = ?, group_add = ?, security_opt = ?, updated_at = ?,
            last_commit = CASE WHEN source IN ('git', 'promote') THEN ? ELSE last_commit END,
            last_commit_message = CASE WHEN source IN ('git', 'promote') THEN ? ELSE last_commit_message END
          WHERE id = ?",
@@ -1010,6 +1020,7 @@ async fn roll_back(
     .bind(&snapshot.labels)
     .bind(&snapshot.devices)
     .bind(&snapshot.group_add)
+    .bind(&snapshot.security_opt)
     .bind(now())
     .bind(commit)
     .bind(message)
@@ -1320,6 +1331,7 @@ async fn deploy(
     let restart = parse_restart(&d.restart).map_err(|e| anyhow::anyhow!(e.message))?;
     let devices = parse_devices(&d.devices).map_err(|e| anyhow::anyhow!(e.message))?;
     let group_add = lines(&d.group_add).map(str::to_string).collect::<Vec<_>>();
+    let security_opt = parse_security_opt(&d.security_opt).map_err(|e| anyhow::anyhow!(e.message))?;
 
     let body = ContainerCreateBody {
         image: Some(image.to_string()),
@@ -1337,6 +1349,7 @@ async fn deploy(
             network_mode: (!d.network.is_empty()).then(|| d.network.clone()),
             devices: (!devices.is_empty()).then_some(devices),
             group_add: (!group_add.is_empty()).then_some(group_add),
+            security_opt: (!security_opt.is_empty()).then_some(security_opt),
             restart_policy: Some(RestartPolicy {
                 name: Some(restart),
                 maximum_retry_count: None,
@@ -1551,6 +1564,23 @@ pub(crate) fn parse_devices(s: &str) -> AppResult<Vec<DeviceMapping>> {
         .collect()
 }
 
+/// Security options, one per line: `key=value`, `key:value` or a bare flag
+/// such as `no-new-privileges`.
+pub(crate) fn parse_security_opt(s: &str) -> AppResult<Vec<String>> {
+    lines(s)
+        .map(|line| {
+            let valid = !line.starts_with(['=', ':', '-'])
+                && !line.chars().any(char::is_whitespace);
+            if !valid {
+                return Err(AppError::bad_request(format!(
+                    "invalid security option '{line}'; use e.g. apparmor=unconfined"
+                )));
+            }
+            Ok(line.to_string())
+        })
+        .collect()
+}
+
 /// Parses port lines like `8080:80`, `127.0.0.1:8080:80/udp` or `80`.
 fn parse_ports(s: &str) -> AppResult<(Vec<String>, PortMap)> {
     let mut exposed = Vec::new();
@@ -1634,6 +1664,17 @@ mod tests {
         );
         assert!(parse_devices("dri").is_err());
         assert!(parse_devices("/dev/dri:/dev/dri:x").is_err());
+    }
+
+    #[test]
+    fn parses_security_options() {
+        assert_eq!(
+            parse_security_opt("systempaths=unconfined\n# rockchip\n apparmor=unconfined \nno-new-privileges").unwrap(),
+            ["systempaths=unconfined", "apparmor=unconfined", "no-new-privileges"]
+        );
+        assert!(parse_security_opt("apparmor = unconfined").is_err());
+        assert!(parse_security_opt("--privileged").is_err());
+        assert!(parse_security_opt("=x").is_err());
     }
 
     fn input(source: &str, upstream_id: Option<i64>) -> DeploymentInput {

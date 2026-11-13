@@ -247,6 +247,8 @@ export interface Deployment {
   devices: string
   /** Extra groups for the container's user, one per line. */
   group_add: string
+  /** Docker security options, e.g. `apparmor=unconfined`, one per line. */
+  security_opt: string
   pinned: boolean
   group_id: number | null
   /** null = automatic (account for the repo's host), 0 = none. */

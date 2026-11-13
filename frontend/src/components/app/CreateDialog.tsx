@@ -121,6 +121,7 @@ export interface ServiceSettings {
   labels: string
   devices: string
   group_add: string
+  security_opt: string
   warnings: string[]
 }
 
@@ -159,6 +160,7 @@ export function summarize(s: ServiceSettings): [string, string][] {
   list('Ports', s.ports)
   list('Devices', s.devices)
   list('Groups', s.group_add)
+  list('Security', s.security_opt)
   list('Volumes', s.volumes)
   list('Variables', s.env, 'variable')
   list('Build args', s.build_args, 'arg')

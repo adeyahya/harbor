@@ -61,10 +61,12 @@ Tagged releases are published to `ghcr.io/adeyahya/harbor` (the tag, and `latest
   repository, Harbor can read its compose files (plus override files such
   as `docker-compose.rockchip.yml`, merged as `docker compose -f … -f …`
   would) and fill in the build settings, ports, variables, volumes,
-  devices, groups, labels and restart policy of the service you pick.
-  Anything a single container can't express (other services, relative bind
-  mounts, `security_opt`, …) is listed before you create it. Deployments
-  can pass host **devices** (e.g. `/dev/dri`) for hardware acceleration.
+  devices, groups, security options, labels and restart policy of the
+  service you pick. Anything a single container can't express (other
+  services, relative bind mounts, …) is listed before you create it.
+  Deployments can pass host **devices** (e.g. `/dev/dri`) for hardware
+  acceleration, and **security options** (e.g. `apparmor=unconfined`) for
+  hardware that needs them, such as Rockchip MPP.
 
   The port editor flags host ports already taken (by a container, Harbor, or
   another process), suggests free ones, and offers the ports the image

@@ -62,6 +62,7 @@ pub struct ServiceSettings {
     labels: String,
     devices: String,
     group_add: String,
+    security_opt: String,
     /// Settings that couldn't be carried over.
     warnings: Vec<String>,
 }
@@ -307,6 +308,7 @@ const HANDLED: &[&str] = &[
     "labels",
     "devices",
     "group_add",
+    "security_opt",
     "container_name",
     "depends_on",
     "expose",
@@ -605,6 +607,15 @@ fn map_service(
         .filter(|g| !g.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
+    // E.g. `systempaths=unconfined` so Rockchip MPP can read the device tree.
+    s.security_opt = svc["security_opt"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(str_of)
+        .filter(|o| !o.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     if let Some(deps) = svc["depends_on"].as_object().filter(|d| !d.is_empty()) {
         let names: Vec<&str> = deps.keys().map(String::as_str).collect();
@@ -660,7 +671,7 @@ mod tests {
                     "environment": { "EMPTY": null, "TZ": "UTC", "MODE": "prod" },
                     "env_file": [ { "path": ".env" }, { "path": "missing.env", "required": false } ],
                     "group_add": ["video"],
-                    "security_opt": ["systempaths=unconfined"],
+                    "security_opt": ["systempaths=unconfined", "apparmor=unconfined"],
                     "labels": { "traefik.enable": "true" },
                     "networks": { "default": null },
                     "volumes": [
@@ -705,12 +716,12 @@ mod tests {
             "/dev/dri\n/dev/video0:/dev/video0:r\n/dev/rga:/dev/rga2"
         );
         assert_eq!(s.group_add, "video");
+        assert_eq!(s.security_opt, "systempaths=unconfined\napparmor=unconfined");
         let warnings = s.warnings.join("\n");
         for expected in [
             "EMPTY",
             "./data:/data",
             "depends on db",
-            "not carried over: security_opt",
         ] {
             assert!(
                 warnings.contains(expected),
@@ -718,7 +729,8 @@ mod tests {
             );
         }
         assert!(!warnings.contains("missing.env"));
-        assert_eq!(s.warnings.len(), 4, "{warnings}");
+        assert!(!warnings.contains("security_opt"), "{warnings}");
+        assert_eq!(s.warnings.len(), 3, "{warnings}");
     }
 
     #[test]

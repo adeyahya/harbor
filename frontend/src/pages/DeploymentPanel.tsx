@@ -44,6 +44,7 @@ const FIELDS = [
   'labels',
   'devices',
   'group_add',
+  'security_opt',
   'git_account_id',
   'upstream_id',
 ] as const satisfies readonly (keyof Deployment)[]
@@ -324,6 +325,17 @@ function DeploymentPanelInner({ name }: { name: string }) {
                 onChange={set('group_add')}
                 rows={2}
                 placeholder={'video\nrender'}
+                hasSpellCheck={false}
+                containerClassName="sm:w-72"
+                controlClassName="font-mono text-[12.5px]"
+              />
+              <TextArea
+                label="Security options"
+                description="Docker --security-opt values, one per line. Rockchip MPP needs systempaths=unconfined and apparmor=unconfined. These loosen the container's isolation."
+                value={config.security_opt}
+                onChange={set('security_opt')}
+                rows={2}
+                placeholder={'systempaths=unconfined\napparmor=unconfined'}
                 hasSpellCheck={false}
                 containerClassName="sm:w-72"
                 controlClassName="font-mono text-[12.5px]"

@@ -1331,7 +1331,10 @@ async fn deploy(
     let restart = parse_restart(&d.restart).map_err(|e| anyhow::anyhow!(e.message))?;
     let devices = parse_devices(&d.devices).map_err(|e| anyhow::anyhow!(e.message))?;
     let group_add = lines(&d.group_add).map(str::to_string).collect::<Vec<_>>();
-    let security_opt = parse_security_opt(&d.security_opt).map_err(|e| anyhow::anyhow!(e.message))?;
+    let mut security_opt = parse_security_opt(&d.security_opt).map_err(|e| anyhow::anyhow!(e.message))?;
+    // The daemon doesn't know `systempaths=unconfined`; like the docker CLI,
+    // send it as "mask nothing, make nothing read-only" instead.
+    let unconfined_paths = take_systempaths(&mut security_opt);
 
     let body = ContainerCreateBody {
         image: Some(image.to_string()),
@@ -1350,6 +1353,8 @@ async fn deploy(
             devices: (!devices.is_empty()).then_some(devices),
             group_add: (!group_add.is_empty()).then_some(group_add),
             security_opt: (!security_opt.is_empty()).then_some(security_opt),
+            masked_paths: unconfined_paths.then(Vec::new),
+            readonly_paths: unconfined_paths.then(Vec::new),
             restart_policy: Some(RestartPolicy {
                 name: Some(restart),
                 maximum_retry_count: None,
@@ -1576,9 +1581,24 @@ pub(crate) fn parse_security_opt(s: &str) -> AppResult<Vec<String>> {
                     "invalid security option '{line}'; use e.g. apparmor=unconfined"
                 )));
             }
+            if let Some(value) = line.strip_prefix("systempaths=")
+                && value != "unconfined"
+            {
+                return Err(AppError::bad_request(format!(
+                    "invalid security option '{line}'; systempaths only takes 'unconfined'"
+                )));
+            }
             Ok(line.to_string())
         })
         .collect()
+}
+
+/// Removes `systempaths=unconfined`, which only the docker CLI understands,
+/// and returns whether it was there.
+fn take_systempaths(opts: &mut Vec<String>) -> bool {
+    let before = opts.len();
+    opts.retain(|o| o != "systempaths=unconfined");
+    opts.len() != before
 }
 
 /// Parses port lines like `8080:80`, `127.0.0.1:8080:80/udp` or `80`.
@@ -1675,6 +1695,12 @@ mod tests {
         assert!(parse_security_opt("apparmor = unconfined").is_err());
         assert!(parse_security_opt("--privileged").is_err());
         assert!(parse_security_opt("=x").is_err());
+        assert!(parse_security_opt("systempaths=confined").is_err());
+
+        let mut opts = parse_security_opt("systempaths=unconfined\napparmor=unconfined").unwrap();
+        assert!(take_systempaths(&mut opts));
+        assert_eq!(opts, ["apparmor=unconfined"]);
+        assert!(!take_systempaths(&mut opts));
     }
 
     fn input(source: &str, upstream_id: Option<i64>) -> DeploymentInput {
